@@ -13,7 +13,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Model } from "@mariozechner/pi-ai";
 import {
-	Box,
 	Container,
 	Input,
 	Key,
@@ -21,7 +20,6 @@ import {
 	SelectList,
 	Spacer,
 	Text,
-	truncateToWidth,
 } from "@mariozechner/pi-tui";
 
 const REVIEW_PROMPT = `You are a code reviewer. Your task is to analyze the provided code for:
@@ -65,23 +63,18 @@ export default function reviewExtension(pi: ExtensionAPI) {
 				}
 			}
 
-			// Build the target specification
 			const target = paths.join(" ") || ".";
 
-			// Show notification that review is starting
 			ctx.ui.notify(`🔍 Starting code review for: ${target}`, "info");
 
-			// Get current model info
 			const originalModel = ctx.model;
 
-			// If model or provider is specified via flags, switch to it
 			if (modelId || provider) {
 				let targetModel = modelId
 					? ctx.modelRegistry.find(provider || originalModel?.provider || "anthropic", modelId)
 					: undefined;
 
 				if (!targetModel && provider && !modelId) {
-					// Just provider specified, get first available from that provider
 					const available = await ctx.modelRegistry.getAvailable();
 					targetModel = available.find(m => m.provider === provider);
 				}
@@ -97,7 +90,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 					ctx.ui.notify(`⚠️ Model not found: ${provider || ""}${modelId ? "/" + modelId : ""}, using current model`, "warning");
 				}
 			} else {
-				// Ask user if they want to switch models
 				const currentModelName = originalModel
 					? `${originalModel.provider}/${originalModel.id}`
 					: "default model";
@@ -111,22 +103,25 @@ export default function reviewExtension(pi: ExtensionAPI) {
 				);
 
 				if (switchChoice === "Switch to a different model") {
-					// Get available models
 					const available = await ctx.modelRegistry.getAvailable();
 
 					if (available.length === 0) {
 						ctx.ui.notify("No other models available with configured API keys", "warning");
 					} else {
-						// Show searchable model picker
-						await showModelPicker(ctx, available);
+						const selectedModel = await showModelPicker(ctx, available);
+						if (selectedModel) {
+							const success = await pi.setModel(selectedModel);
+							if (success) {
+								ctx.ui.notify(`Switched to model: ${selectedModel.provider}/${selectedModel.id}`, "info");
+							} else {
+								ctx.ui.notify(`Failed to switch to ${selectedModel.provider}/${selectedModel.id}`, "error");
+							}
+						}
 					}
 				}
 			}
 
-			// Send the review prompt to the agent
 			const fullPrompt = `${REVIEW_PROMPT}\n\nPlease review: ${target}`;
-
-			// Send as a user message that will trigger agent processing
 			pi.sendUserMessage(fullPrompt);
 		},
 	});
@@ -136,10 +131,10 @@ export default function reviewExtension(pi: ExtensionAPI) {
  * Shows a searchable model picker similar to pi's built-in model selector
  */
 async function showModelPicker(
-	ctx: { ui: any; modelRegistry: any; theme: any },
+	ctx: { ui: any; theme: any },
 	available: Model[]
-): Promise<void> {
-	const result = await ctx.ui.custom<Model | null>((tui, theme, keybindings, done) => {
+): Promise<Model | null> {
+	return ctx.ui.custom<Model | null>((tui, theme, _keybindings, done) => {
 		// Create container
 		const container = new Container();
 
@@ -159,8 +154,8 @@ async function showModelPicker(
 			noMatch: (t: string) => theme.fg("warning", t),
 		};
 
-		// Create select list (max visible is 10 items)
-		const selectList = new SelectList(items, 10, selectListTheme);
+		// Create select list
+		const selectList = new SelectList(items, 12, selectListTheme);
 
 		// Create search input
 		const searchInput = new Input(
@@ -203,13 +198,6 @@ async function showModelPicker(
 		container.addChild(spacer);
 		container.addChild(instructionsText);
 
-		// Wrap in box with some styling
-		const boxTheme = {
-			border: theme.fg("accent", "─"),
-			paddingX: 1,
-			paddingY: 0,
-		};
-
 		// Handle input
 		function handleInput(data: string) {
 			// Handle escape
@@ -226,3 +214,27 @@ async function showModelPicker(
 						m => `${m.provider}/${m.id}` === selected.value
 					);
 					done(selectedModel || null);
+				}
+				return;
+			}
+
+			// Handle up/down for select list navigation
+			if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+				selectList.handleInput(data);
+				tui.requestRender();
+				return;
+			}
+
+			// Route all other input to the search input
+			searchInput.handleInput(data);
+			selectList.setFilter(searchInput.getValue());
+			tui.requestRender();
+		}
+
+		return {
+			render: (width: number) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput,
+		};
+	});
+}
