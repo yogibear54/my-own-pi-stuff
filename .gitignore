@@ -1,3 +1,4 @@
 auth.json
 settings.json
 sessions/
+node_modules/
