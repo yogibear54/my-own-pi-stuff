@@ -38,20 +38,18 @@ execSync("mkdir -p ~/.cache/scraping", { stdio: "ignore" });
 
 if (useProfile) {
   // Sync profile with rsync (much faster on subsequent runs)
+  // Linux profile path: ~/.config/google-chrome/
   execSync(
-    `rsync -a --delete "${process.env["HOME"]}/Library/Application Support/Google/Chrome/" ~/.cache/scraping/`,
+    `rsync -a --delete "${process.env["HOME"]}/.config/google-chrome/" ~/.cache/scraping/`,
     { stdio: "pipe" },
   );
 }
 
 // Start a separate Chrome instance in background (detached so Node can exit)
-// `open -na` avoids interfering with an already-running personal Chrome.
+// Launch Chrome directly (Linux) - avoid interfering with any running Chrome.
 spawn(
-  "/usr/bin/open",
+  "/usr/bin/google-chrome",
   [
-    "-na",
-    "Google Chrome",
-    "--args",
     "--remote-debugging-port=9222",
     `--user-data-dir=${process.env["HOME"]}/.cache/scraping`,
     "--profile-directory=Default",

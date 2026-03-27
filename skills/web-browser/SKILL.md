@@ -15,7 +15,7 @@ Minimal CDP tools for collaborative site exploration.
 ./scripts/start.js --profile    # Copy your profile (cookies, logins)
 ```
 
-Start Chrome on `:9222` with remote debugging.
+Start Chrome on `:9222` with remote debugging. Requires `google-chrome` installed on Linux.
 
 ## Navigate
 
@@ -50,7 +50,7 @@ Screenshot current viewport, returns temp file path
 ./scripts/pick.js "Click the submit button"
 ```
 
-Interactive element picker. Click to select, Cmd/Ctrl+Click for multi-select, Enter to finish.
+Interactive element picker. Click to select, Ctrl+Click for multi-select, Enter to finish.
 
 ## Dismiss Cookie Dialogs
 
