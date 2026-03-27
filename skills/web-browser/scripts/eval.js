@@ -37,7 +37,10 @@ try {
   const sessionId = await cdp.attachToPage(page.targetId);
 
   log("evaluating...");
-  const expression = `(async () => { return (${code}); })()`;
+  // Wrap code in an async IIFE. We avoid wrapping in "return (...)" because
+  // semicolons in the user's code would break the syntax. Instead, we use
+  // "return ${code}" which works whether or not the code ends with a semicolon.
+  const expression = `(async () => { return ${code}; })()`;
   const result = await cdp.evaluate(sessionId, expression);
 
   log("formatting result...");
