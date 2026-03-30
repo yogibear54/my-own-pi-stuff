@@ -1,0 +1,21 @@
+{
+  "lastChangelogVersion": "0.64.0",
+  "defaultProvider": "zai",
+  "defaultModel": "glm-5.1",
+  "enabledModels": [
+    "opencode-go/glm-5",
+    "opencode-go/kimi-k2.5",
+    "opencode-go/minimax-m2.5",
+    "opencode-go/minimax-m2.7",
+    "zai/glm-4.6",
+    "zai/glm-4.7",
+    "zai/glm-5.1",
+    "zai/glm-4.5v",
+    "zai/glm-4.6v",
+    "zai/glm-4.5-air",
+    "zai/glm-5-turbo",
+    "zai/glm-4.5-flash",
+    "zai/glm-4.7-flash"
+  ],
+  "defaultThinkingLevel": "medium"
+}
