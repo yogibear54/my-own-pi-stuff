@@ -14,8 +14,8 @@ Interactive web search using the web-browser skill. Searches DuckDuckGo by defau
 Requires the web-browser skill. Start Chrome first:
 
 ```bash
-./scripts/start.js              # Fresh profile
-./scripts/start.js --profile    # Copy your profile (cookies, logins)
+{baseDir}/../web-browser/scripts/start.js              # Fresh profile
+{baseDir}/../web-browser/scripts/start.js --profile    # Copy your profile (cookies, logins)
 ```
 
 ## Search
