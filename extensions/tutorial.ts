@@ -5,24 +5,24 @@
  * codebase tutorials:
  *
  * Commands:
- *   /tutorial:create <target-dir> [source-dir]   # Create a new tutorial
+ *   /tutorial:create <tutorial-dir> [source-code-dir]   # Create a new tutorial
  *   /tutorial:create                              # Interactive mode
- *   /tutorial:update <target-dir>                 # Detect drift & update outdated chapters
+ *   /tutorial:update <tutorial-dir>                 # Detect drift & update outdated chapters
  *
  * The extension also registers tools:
  *   - configure_tutorial: Structured requirement gathering for creation
  *   - check_tutorial_drift: Detect which chapters are outdated
  *
- * Drift Detection (Option B):
- *   A tutorial-manifest.json is created alongside the tutorial, recording
- *   which source files each chapter references along with their SHA-256
- *   hashes. On /tutorial:update, the manifest is compared against the
- *   current state of the source files to detect outdated chapters.
+ * Drift Detection:
+ *   A chapters.json is created alongside the tutorial, recording which source files
+ *   each chapter references. Drift detection uses git to compare the "Based On Commit"
+ *   in README.md against the current HEAD to detect changes.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -30,7 +30,7 @@ import crypto from "node:crypto";
 // ─── Types ───────────────────────────────────────────────────────────
 
 interface TutorialConfig {
-	targetDir: string;
+	tutorialDir: string;
 	sourceDir: string;
 	projectName: string;
 	audience: string;
@@ -41,24 +41,21 @@ interface TutorialConfig {
 	techStack: "react" | "vue" | "svelte" | "html";
 }
 
-interface TutorialManifest {
+interface ChaptersIndex {
 	version: number;
-	createdAt: string;
 	updatedAt: string;
-	sourceDir: string;
-	config: TutorialConfig;
-	chapters: ChapterManifest[];
+	chapters: ChapterEntry[];
 }
 
-interface ChapterManifest {
+interface ChapterEntry {
 	id: string;
 	title: string;
-	sourceFiles: SourceFileEntry[];
+	sourceFiles: string[]; // relative paths from sourceDir
 }
 
-interface SourceFileEntry {
-	path: string; // relative to sourceDir
-	hash: string; // SHA-256 hex digest
+interface ReadmeContent {
+	basedOnCommit: string;
+	sourceDir: string;
 }
 
 interface TodoResult {
@@ -85,8 +82,9 @@ interface TodoItem {
 
 // ─── Constants ───────────────────────────────────────────────────────
 
-const MANIFEST_FILENAME = "tutorial-manifest.json";
+const CHAPTERS_FILENAME = "chapters.json";
 const TODOS_DIR_NAME = ".pi/todos";
+const README_FILENAME = "README.md";
 
 // ─── Extension Entry Point ──────────────────────────────────────────
 
@@ -95,6 +93,189 @@ export default function createTutorialExtension(pi: ExtensionAPI) {
 	registerTutorialUpdateCommand(pi);
 	registerConfigureTutorialTool(pi);
 	registerCheckTutorialDriftTool(pi);
+}
+
+// ─── Git Utilities ──────────────────────────────────────────────────
+
+function expandTildePath(filePath: string): string {
+	if (filePath.startsWith("~/")) {
+		return filePath.replace("~", process.env.HOME || require("os").homedir());
+	}
+	return filePath;
+}
+
+function getGitCommit(sourceDir: string): string | null {
+	const expandedPath = expandTildePath(sourceDir);
+	try {
+		return execSync("git rev-parse HEAD", {
+			cwd: expandedPath,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		}).trim();
+	} catch {
+		return null;
+	}
+}
+
+function getGitChanges(sourceDir: string, baseCommit: string): GitChange[] {
+	const changes: GitChange[] = [];
+	const expandedPath = expandTildePath(sourceDir);
+
+	try {
+		// Get modified and deleted files between base commit and HEAD
+		const diffOutput = execSync(
+			`git diff --name-status ${baseCommit}..HEAD`,
+			{ cwd: expandedPath, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+		).trim();
+
+		for (const line of diffOutput.split("\n")) {
+			if (!line.trim()) continue;
+			const [status, ...pathParts] = line.split("\t");
+			const filePath = pathParts.join("\t");
+			changes.push({
+				path: filePath,
+				status: status === "D" ? "deleted" : "modified",
+			});
+		}
+
+		// Get new (untracked) files
+		const statusOutput = execSync(
+			"git status --porcelain",
+			{ cwd: expandedPath, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+		).trim();
+
+		for (const line of statusOutput.split("\n")) {
+			if (!line.trim()) continue;
+			const status = line.substring(0, 2).trim();
+			const filePath = line.substring(3).trim();
+			// ?? = untracked (new file)
+			if (status === "??" || status === "A") {
+				changes.push({ path: filePath, status: "new" });
+			}
+		}
+	} catch {
+		// Git command failed, return empty changes
+	}
+
+	return changes;
+}
+
+interface GitChange {
+	path: string;
+	status: "modified" | "deleted" | "new";
+}
+
+// ─── README Utilities ────────────────────────────────────────────────
+
+function parseReadme(tutorialDir: string): ReadmeContent | null {
+	const readmePath = path.resolve(tutorialDir, README_FILENAME);
+	if (!existsSync(readmePath)) return null;
+
+	try {
+		const content = readFileSync(readmePath, "utf-8");
+
+		// Extract Based On Commit
+		const basedOnMatch = content.match(/\*\*Based On Commit\*\*\s*\|\s*`([^`]+)`/);
+		const basedOnCommit = basedOnMatch ? basedOnMatch[1] : null;
+
+		// Extract Source Location
+		const sourceMatch = content.match(/\*\*Source Location\*\*\s*\|\s*`([^`]+)`/);
+		const sourceDir = sourceMatch ? sourceMatch[1] : null;
+
+		if (!basedOnCommit || !sourceDir) return null;
+
+		return { basedOnCommit, sourceDir };
+	} catch {
+		return null;
+	}
+}
+
+function updateReadmeCommit(tutorialDir: string, newCommit: string): void {
+	const readmePath = path.resolve(tutorialDir, README_FILENAME);
+	if (!existsSync(readmePath)) return;
+
+	try {
+		let content = readFileSync(readmePath, "utf-8");
+		// Update the Based On Commit line
+		content = content.replace(
+			/(\*\*Based On Commit\*\*\s*\|\s*)`[^`]+`/,
+			`$1\`${newCommit}\``
+		);
+		writeFileSync(readmePath, content, "utf-8");
+	} catch {
+		// Ignore errors
+	}
+}
+
+function addReadmeUpdateEntry(tutorialDir: string, version: string, details: string): void {
+	const readmePath = path.resolve(tutorialDir, README_FILENAME);
+	if (!existsSync(readmePath)) return;
+
+	try {
+		let content = readFileSync(readmePath, "utf-8");
+		const today = new Date().toISOString().split("T")[0];
+		const newEntry = `| ${today} | ${version} | ${details} |`;
+
+		// Find the Update History table and add the new entry
+		const lines = content.split("\n");
+		let inUpdateHistory = false;
+		let tableEndIndex = -1;
+
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			if (line.includes("## Update History")) {
+				inUpdateHistory = true;
+				continue;
+			}
+			if (inUpdateHistory) {
+				// Check if we've reached the end of the table
+				if (line.includes("|") && !line.includes("---")) {
+					continue;
+				}
+				if (line.trim() === "" || line.startsWith("#") || line.startsWith("*")) {
+					tableEndIndex = i;
+					break;
+				}
+			}
+		}
+
+		if (tableEndIndex > 0) {
+			lines.splice(tableEndIndex, 0, newEntry);
+			writeFileSync(readmePath, lines.join("\n"), "utf-8");
+		}
+	} catch {
+		// Ignore errors
+	}
+}
+
+// ─── Chapters Index Utilities ────────────────────────────────────────
+
+function loadChaptersIndex(tutorialDir: string): ChaptersIndex | null {
+	const chaptersPath = path.resolve(tutorialDir, CHAPTERS_FILENAME);
+	if (!existsSync(chaptersPath)) return null;
+
+	try {
+		const raw = readFileSync(chaptersPath, "utf-8");
+		return JSON.parse(raw) as ChaptersIndex;
+	} catch {
+		return null;
+	}
+}
+
+function saveChaptersIndex(tutorialDir: string, index: ChaptersIndex): void {
+	const chaptersPath = path.resolve(tutorialDir, CHAPTERS_FILENAME);
+	writeFileSync(chaptersPath, JSON.stringify(index, null, 2), "utf-8");
+}
+
+// Polyfill for writeFileSync (since we imported writeFile earlier)
+function writeFileSync(filePath: string, content: string, encoding: BufferEncoding): void {
+	const fs = require("node:fs");
+	fs.writeFileSync(filePath, content, encoding);
+}
+
+function readFileSync(filePath: string, encoding: BufferEncoding): string {
+	const fs = require("node:fs");
+	return fs.readFileSync(filePath, encoding);
 }
 
 // ─── /tutorial:create ───────────────────────────────────────────────
@@ -107,13 +288,13 @@ function registerTutorialCreateCommand(pi: ExtensionAPI) {
 
 			// Quick mode: arguments provided
 			if (argParts.length >= 1) {
-				const targetDir = argParts[0];
+				const tutorialDir = argParts[0];
 				const sourceDir = argParts[1] || ctx.cwd;
 
 				await gatherRequirementsAndPrompt(pi, ctx, {
-					targetDir,
+					tutorialDir,
 					sourceDir,
-					projectName: inferProjectName(targetDir),
+					projectName: inferProjectName(tutorialDir),
 					audience: "Developers familiar with JavaScript but new to TypeScript",
 					goals: ["Navigate the codebase", "Understand architecture patterns", "Make small changes", "Debug common issues"],
 					scope: "detailed",
@@ -126,7 +307,7 @@ function registerTutorialCreateCommand(pi: ExtensionAPI) {
 
 			// Interactive mode: need to gather requirements
 			if (!ctx.hasUI) {
-				ctx.ui.notify("Error: Interactive mode requires UI. Use /tutorial:create <target-dir> [source-dir]", "error");
+				ctx.ui.notify("Error: Interactive mode requires UI. Use /tutorial:create <tutorial-dir> [source-code-dir]", "error");
 				return;
 			}
 
@@ -142,7 +323,7 @@ function registerTutorialCreateCommand(pi: ExtensionAPI) {
 7. Should it include diagrams? (yes/no)
 8. Which tech stack for the tutorial UI? ('react', 'vue', 'svelte', or 'html')
 
-Or use quick mode: /tutorial:create <target-dir> [source-dir]`, { deliverAs: "steer" });
+Or use quick mode: /tutorial:create <tutorial-dir> [source-code-dir]`, { deliverAs: "steer" });
 		},
 	});
 }
@@ -151,87 +332,245 @@ Or use quick mode: /tutorial:create <target-dir> [source-dir]`, { deliverAs: "st
 
 function registerTutorialUpdateCommand(pi: ExtensionAPI) {
 	pi.registerCommand("tutorial:update", {
-		description: "Detect drift in an existing tutorial and update outdated chapters",
+		description: "Detect drift in an existing tutorial and update outdated chapters. Usage: /tutorial:update <tutorial-dir> [source-code-dir] [base-commit]",
 		handler: async (args, ctx) => {
 			const argParts = (args || "").trim().split(/\s+/).filter(Boolean);
 
 			if (argParts.length < 1) {
-				ctx.ui.notify("Usage: /tutorial:update <target-dir>", "error");
+				ctx.ui.notify("Usage: /tutorial:update <tutorial-dir> [source-code-dir] [base-commit]", "error");
 				return;
 			}
 
-			const targetDir = argParts[0];
-			const manifestPath = path.resolve(ctx.cwd, targetDir, MANIFEST_FILENAME);
+			const tutorialDir = argParts[0];
+			const providedSourceDir = argParts[1] || null;
+			const providedBaseCommit = argParts[2] || null;
 
-			// Check manifest exists
-			if (!existsSync(manifestPath)) {
+			// Try to parse README for baseline commit and source directory
+			const readme = parseReadme(tutorialDir);
+
+			// Determine source directory (from args, README, or need to ask)
+			let sourceDir: string;
+			if (providedSourceDir) {
+				sourceDir = providedSourceDir;
+			} else if (readme?.sourceDir) {
+				sourceDir = readme.sourceDir;
+			} else {
+				// Need to ask user for source directory
+				pi.sendUserMessage(
+					`I need more information to detect drift in the tutorial at "${tutorialDir}".
+
+**Missing**: Source codebase location.
+
+Please provide the path to the source codebase that this tutorial documents.
+
+You can either:
+- Tell me the source directory path
+- Or provide it when running the command: /tutorial:update ${tutorialDir} /path/to/source`,
+					{ deliverAs: "steer" }
+				);
+				return;
+			}
+
+			// Determine baseline commit (from args, README, or need to ask)
+			let baseCommit: string;
+			if (providedBaseCommit) {
+				baseCommit = providedBaseCommit;
+			} else if (readme?.basedOnCommit) {
+				baseCommit = readme.basedOnCommit;
+			} else {
+				// Need to ask user for baseline commit
+				const currentCommit = getGitCommit(sourceDir);
+				pi.sendUserMessage(
+					`I need more information to detect drift in the tutorial at "${tutorialDir}".
+
+**Missing**: "Based On Commit" baseline.
+
+The ${README_FILENAME} doesn't have baseline commit information, or this tutorial wasn't created with /tutorial:create.
+
+Please provide the git commit hash that should be used as the baseline for detecting changes.
+
+${currentCommit ? `Current HEAD commit: \`${currentCommit}\`` : "(Could not determine current HEAD commit)"}
+
+You can either:
+- Tell me the baseline commit hash
+- Or provide it when running the command: /tutorial:update ${tutorialDir} ${sourceDir} <commit-hash>`,
+					{ deliverAs: "steer" }
+				);
+				return;
+			}
+
+			// Load chapters index (optional - we can still detect drift without it)
+			const chaptersIndex = loadChaptersIndex(tutorialDir);
+
+			// Get current git commit
+			const currentCommit = getGitCommit(sourceDir);
+			if (!currentCommit) {
 				ctx.ui.notify(
-					`No ${MANIFEST_FILENAME} found in ${targetDir}. Was the tutorial created with /tutorial:create?`,
+					`Could not get current git commit from ${sourceDir}. Is this a git repository?`,
 					"error",
 				);
 				return;
 			}
 
-			// Load and validate manifest
-			let manifest: TutorialManifest;
-			try {
-				const raw = await readFile(manifestPath, "utf-8");
-				manifest = JSON.parse(raw) as TutorialManifest;
-			} catch (err) {
-				ctx.ui.notify(`Failed to read manifest: ${err instanceof Error ? err.message : "unknown error"}`, "error");
-				return;
-			}
-
-			if (!manifest.chapters || !Array.isArray(manifest.chapters)) {
-				ctx.ui.notify("Manifest is invalid: missing or malformed chapters array.", "error");
-				return;
-			}
-
-			// Perform drift detection
-			const driftResult = detectDrift(manifest);
+			// Get git changes since the baseline commit
+			const gitChanges = getGitChanges(sourceDir, baseCommit);
 
 			// Build the update prompt
-			const outdatedCount = driftResult.outdatedChapters.length;
-			const upToDateCount = driftResult.upToDateChapters.length;
+			let prompt: string;
 
-			if (outdatedCount === 0) {
-				pi.sendUserMessage(`Tutorial is up to date! All ${upToDateCount} chapters match their source files. No updates needed.`, { deliverAs: "assistant" });
+			if (gitChanges.length === 0) {
+				pi.sendUserMessage(
+					`No changes detected between the baseline and current commits.\n\n` +
+					`Based on commit: \`${baseCommit}\`\n` +
+					`Current commit: \`${currentCommit}\`\n\n` +
+					`No source file changes detected.`,
+					{ deliverAs: "assistant" }
+				);
 				return;
 			}
 
-			let prompt = `Tutorial drift detected! **${outdatedCount} of ${outdatedCount + upToDateCount} chapters** are outdated and need updating.\n\n`;
+			prompt = `Git changes detected since baseline commit.\n\n`;
+			prompt += `**Based On Commit**: \`${baseCommit}\`\n`;
+			prompt += `**Current Commit**: \`${currentCommit}\`\n\n`;
 
-			prompt += "### Outdated Chapters\n\n";
-			for (const ch of driftResult.outdatedChapters) {
-				prompt += `**${ch.title}** (\`${ch.id}\`)\n`;
-				prompt += `  Changed files:\n`;
-				for (const f of ch.changedFiles) {
-					prompt += `  - \`${f.path}\` ${f.status === "modified" ? "(modified)" : f.status === "deleted" ? "(deleted)" : "(new)"}\n`;
+			prompt += "### Changed Files\n\n";
+			for (const change of gitChanges) {
+				const statusIcon = change.status === "modified" ? "M" : change.status === "deleted" ? "D" : "A";
+				const statusLabel = change.status === "modified" ? "modified" : change.status === "deleted" ? "deleted" : "new";
+				prompt += `  [\`${statusIcon}\`] \`${change.path}\` (${statusLabel})\n`;
+			}
+			prompt += "\n";
+
+			// If we have chapters index, show which chapters are affected
+			if (chaptersIndex) {
+				const driftResult = detectDriftViaGit(chaptersIndex, gitChanges);
+				const outdatedCount = driftResult.outdatedChapters.length;
+				const upToDateCount = driftResult.upToDateChapters.length;
+
+				if (outdatedCount > 0) {
+					prompt += `### Outdated Chapters\n\n`;
+					for (const ch of driftResult.outdatedChapters) {
+						prompt += `**${ch.title}** (\`${ch.id}\`)\n`;
+						prompt += `  Changed files:\n`;
+						for (const f of ch.changedFiles) {
+							prompt += `  - \`${f.path}\` (${f.status})\n`;
+						}
+						prompt += "\n";
+					}
 				}
-				prompt += "\n";
+
+				if (upToDateCount > 0) {
+					prompt += `### Up-to-date Chapters (${upToDateCount})\n\n`;
+					for (const ch of driftResult.upToDateChapters) {
+						prompt += `- **${ch.title}** (\`${ch.id}\`) ✓\n`;
+					}
+					prompt += "\n";
+				}
+
+				prompt += `### Instructions\n\n`;
+				prompt += `Please update the outdated chapters in "${tutorialDir}" based on the current source files.\n`;
+				prompt += `Only regenerate the chapters listed above. Preserve any manual edits in up-to-date chapters.\n\n`;
+				prompt += `For each outdated chapter:\n`;
+				prompt += `1. Re-read the current source files listed above\n`;
+				prompt += `2. Update the chapter content to reflect current code\n`;
+				prompt += `3. Update the \`chapters.json\` if file references change\n`;
+				prompt += `4. Update the \`README.md\` "Based On Commit" to \`${currentCommit}\`\n`;
+				prompt += `5. Add an entry to the Update History table\n\n`;
+			} else {
+				// No chapters index - just show the changes
+				prompt += `**Note**: No ${CHAPTERS_FILENAME} found. Chapter-level drift detection unavailable.\n\n`;
+				prompt += `### Instructions\n\n`;
+				prompt += `Please review the changed files above and update the relevant chapters in "${tutorialDir}".\n\n`;
+				prompt += `After updating, consider creating a ${CHAPTERS_FILENAME} file to enable chapter-level drift detection:\n`;
+				prompt += `- List each chapter's id, title, and source files it references\n`;
+				prompt += `- This will help identify which chapters are affected by future changes\n\n`;
 			}
 
-			if (upToDateCount > 0) {
-				prompt += `### Up-to-date Chapters (${upToDateCount})\n\n`;
-				for (const ch of driftResult.upToDateChapters) {
-					prompt += `- **${ch.title}** (\`${ch.id}\`) ✓\n`;
-				}
-				prompt += "\n";
-			}
-
-			prompt += `### Instructions\n\n`;
-			prompt += `Please update the outdated chapters in "${targetDir}" based on the current source files.\n`;
-			prompt += `Only regenerate the chapters listed above. Preserve any manual edits in up-to-date chapters.\n\n`;
-			prompt += `For each outdated chapter:\n`;
-			prompt += `1. Re-read the current source files listed above\n`;
-			prompt += `2. Update the chapter content to reflect current code\n`;
-			prompt += `3. Update the file hashes in ${MANIFEST_FILENAME}\n\n`;
-			prompt += `Source codebase: ${manifest.sourceDir}\n`;
-			prompt += `Tutorial target: ${targetDir}\n`;
+			prompt += `Source codebase: ${sourceDir}\n`;
+			prompt += `Tutorial target: ${tutorialDir}\n`;
 
 			pi.sendUserMessage(prompt);
 		},
 	});
+}
+
+// ─── Drift Detection (Git-based) ────────────────────────────────────
+
+interface ChangedFile {
+	path: string;
+	status: "modified" | "deleted" | "new";
+}
+
+interface OutdatedChapter {
+	id: string;
+	title: string;
+	changedFiles: ChangedFile[];
+}
+
+interface UpToDateChapter {
+	id: string;
+	title: string;
+}
+
+interface DriftResult {
+	outdatedChapters: OutdatedChapter[];
+	upToDateChapters: UpToDateChapter[];
+}
+
+function detectDriftViaGit(chaptersIndex: ChaptersIndex, gitChanges: GitChange[]): DriftResult {
+	const outdatedChapters: OutdatedChapter[] = [];
+	const upToDateChapters: UpToDateChapter[] = [];
+
+	// Create a set of changed file paths for quick lookup
+	const changedFilesSet = new Set(gitChanges.map(c => c.path));
+
+	for (const chapter of chaptersIndex.chapters) {
+		const changedFiles: ChangedFile[] = [];
+
+		for (const filePattern of chapter.sourceFiles) {
+			// Check if this file matches any changed file
+			if (changedFilesSet.has(filePattern)) {
+				const change = gitChanges.find(c => c.path === filePattern)!;
+				changedFiles.push(change);
+			}
+
+			// Handle glob patterns (e.g., "src/services/*.ts")
+			if (filePattern.includes("*")) {
+				const regex = globToRegex(filePattern);
+				for (const change of gitChanges) {
+					if (regex.test(change.path) && !changedFiles.some(c => c.path === change.path)) {
+						changedFiles.push(change);
+					}
+				}
+			}
+		}
+
+		if (changedFiles.length > 0) {
+			outdatedChapters.push({
+				id: chapter.id,
+				title: chapter.title,
+				changedFiles,
+			});
+		} else {
+			upToDateChapters.push({
+				id: chapter.id,
+				title: chapter.title,
+			});
+		}
+	}
+
+	return { outdatedChapters, upToDateChapters };
+}
+
+function globToRegex(pattern: string): RegExp {
+	// Convert simple glob pattern to regex
+	// * matches any characters except /
+	// ** matches any characters including /
+	const escaped = pattern
+		.replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+		.replace(/\*\*/g, ".*")
+		.replace(/\*/g, "[^/]*");
+	return new RegExp(`^${escaped}$`);
 }
 
 // ─── configure_tutorial Tool ─────────────────────────────────────────
@@ -240,9 +579,9 @@ function registerConfigureTutorialTool(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "configure_tutorial",
 		label: "Configure Tutorial",
-		description: "Gather requirements for creating a codebase tutorial. Use the 'targetDir' parameter to specify where tutorial files will be created. Call this tool when you have gathered all requirements from the user.",
+		description: "Gather requirements for creating a codebase tutorial. Use the 'tutorialDir' parameter to specify where tutorial files will be created. Call this tool when you have gathered all requirements from the user.",
 		parameters: Type.Object({
-			targetDir: Type.String(),
+			tutorialDir: Type.String(),
 			sourceDir: Type.String(),
 			projectName: Type.String(),
 			audience: Type.String(),
@@ -264,18 +603,18 @@ function registerConfigureTutorialTool(pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			// Validate required params
-			if (!params.targetDir) {
+			if (!params.tutorialDir) {
 				return {
-					content: [{ type: "text", text: "Error: targetDir is required. Please specify the directory where tutorial files should be created." }],
-					details: { cancelled: true, error: "Missing targetDir" },
+					content: [{ type: "text", text: "Error: tutorialDir is required. Please specify the directory where tutorial files should be created." }],
+					details: { cancelled: true, error: "Missing tutorialDir" },
 				};
 			}
 
 			// Build config
 			const config: TutorialConfig = {
-				targetDir: params.targetDir,
-				sourceDir: params.sourceDir || ctx.cwd,
-				projectName: params.projectName || inferProjectName(params.targetDir),
+				tutorialDir: params.tutorialDir,
+				sourceDir: params.sourceCodeDir || ctx.cwd,
+				projectName: params.projectName || inferProjectName(params.tutorialDir),
 				audience: params.audience || "Developers familiar with JavaScript but new to TypeScript",
 				goals: params.goals || ["Navigate the codebase", "Understand architecture patterns"],
 				scope: params.scope || "detailed",
@@ -294,7 +633,7 @@ function registerConfigureTutorialTool(pi: ExtensionAPI) {
 			let responseText = `Tutorial configuration complete. Now analyze the codebase and create the tutorial.
 
 Configuration:
-- Target: ${config.targetDir}
+- Target: ${config.tutorialDir}
 - Source: ${config.sourceDir}
 - Project: ${config.projectName}
 - Audience: ${config.audience}
@@ -320,7 +659,7 @@ Configuration:
 		},
 
 		renderCall(args, theme) {
-			const target = args.targetDir as string || "(unset)";
+			const target = args.tutorialDir as string || "(unset)";
 			const source = args.sourceDir as string || "(cwd)";
 			const project = args.projectName as string || "(unnamed)";
 			return {
@@ -350,7 +689,7 @@ Configuration:
 				render(_width: number) {
 					return [
 						theme.fg("success", "✓ Tutorial configured"),
-						`  Target: ${config.targetDir}`,
+						`  Target: ${config.tutorialDir}`,
 						`  Source: ${config.sourceDir}`,
 						`  Scope: ${config.scope}`,
 						`  Stack: ${config.techStack}`,
@@ -367,82 +706,136 @@ function registerCheckTutorialDriftTool(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "check_tutorial_drift",
 		label: "Check Tutorial Drift",
-		description: "Check if an existing tutorial's chapters are outdated by comparing source file hashes in the manifest against the current files. Returns a list of outdated chapters with details on which files changed.",
+		description: "Check if an existing tutorial's chapters are outdated by comparing the README.md 'Based On Commit' against the current git HEAD. Returns a list of outdated chapters with details on which files changed.",
 		parameters: Type.Object({
-			targetDir: Type.String({ description: "The tutorial directory containing tutorial-manifest.json" }),
+			tutorialDir: Type.String({ description: "The tutorial directory containing README.md and chapters.json" }),
+			sourceDir: Type.Optional(Type.String({ description: "The source codebase directory (overrides README.md if provided)" })),
+			baseCommit: Type.Optional(Type.String({ description: "The baseline git commit to compare against (overrides README.md if provided)" })),
 		}),
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const targetDir = params.targetDir;
-			const manifestPath = path.resolve(ctx.cwd, targetDir, MANIFEST_FILENAME);
+			const tutorialDir = params.tutorialDir;
 
-			if (!existsSync(manifestPath)) {
+			// Try to parse README for baseline commit and source directory
+			const readme = parseReadme(tutorialDir);
+
+			// Determine source directory (from args or README)
+			const sourceDir = params.sourceCodeDir || readme?.sourceDir;
+			if (!sourceDir) {
 				return {
 					content: [{
 						type: "text",
-						text: `No ${MANIFEST_FILENAME} found in ${targetDir}. Cannot check drift. Was the tutorial created with /tutorial:create?`,
+						text: `No source directory found. Please provide either a ${README_FILENAME} with "Source Location" or pass sourceDir parameter.`,
 					}],
-					details: { error: "Manifest not found" },
+					details: { error: "Source directory not specified" },
 				};
 			}
 
-			let manifest: TutorialManifest;
-			try {
-				const raw = await readFile(manifestPath, "utf-8");
-				manifest = JSON.parse(raw) as TutorialManifest;
-			} catch (err) {
+			// Determine baseline commit (from args or README)
+			const baseCommit = params.baseCommit || readme?.basedOnCommit;
+			if (!baseCommit) {
+				const currentCommit = getGitCommit(sourceDir);
 				return {
 					content: [{
 						type: "text",
-						text: `Failed to read manifest: ${err instanceof Error ? err.message : "unknown error"}`,
+						text: `No baseline commit found. Please provide either a ${README_FILENAME} with "Based On Commit" or pass baseCommit parameter.${currentCommit ? `\n\nCurrent HEAD: \`${currentCommit}\`` : ""}`,
 					}],
-					details: { error: "Failed to read manifest" },
+					details: { error: "Baseline commit not specified" },
 				};
 			}
 
-			const driftResult = detectDrift(manifest);
-			const { outdatedChapters, upToDateChapters } = driftResult;
-
-			if (outdatedChapters.length === 0) {
+			// Get current git commit
+			const currentCommit = getGitCommit(sourceDir);
+			if (!currentCommit) {
 				return {
 					content: [{
 						type: "text",
-						text: `Tutorial is up to date. All ${upToDateChapters.length} chapter(s) match their source files.`,
+						text: `Could not get current git commit from ${sourceDir}. Is this a git repository?`,
 					}],
-					details: { outdatedCount: 0, upToDateCount: upToDateChapters.length },
+					details: { error: "Git error" },
 				};
 			}
 
-			let text = `Drift detected: **${outdatedChapters.length} of ${outdatedChapters.length + upToDateChapters.length} chapters are outdated.**\n\n`;
+			// Get git changes since the baseline commit
+			const gitChanges = getGitChanges(sourceDir, baseCommit);
 
-			for (const ch of outdatedChapters) {
-				text += `**${ch.title}** (\`${ch.id}\`)\n`;
-				for (const f of ch.changedFiles) {
-					const statusLabel = f.status === "modified" ? "modified" : f.status === "deleted" ? "⚠️ deleted" : "new";
-					text += `  - \`${f.path}\` (${statusLabel})\n`;
+			// Load chapters index (optional)
+			const chaptersIndex = loadChaptersIndex(tutorialDir);
+
+			// Build result
+			if (gitChanges.length === 0) {
+				const upToDateCount = chaptersIndex?.chapters.length ?? 0;
+				return {
+					content: [{
+						type: "text",
+						text: `No changes detected.\n\nBased on commit: \`${baseCommit}\`\nCurrent commit: \`${currentCommit}\`\n\nAll source files are unchanged.`,
+					}],
+					details: { outdatedCount: 0, upToDateCount, basedOnCommit: baseCommit, currentCommit },
+				};
+			}
+
+			let text = `**${gitChanges.length} file(s)** changed since baseline.\n\n`;
+			text += `Based on commit: \`${baseCommit}\`\n`;
+			text += `Current commit: \`${currentCommit}\`\n\n`;
+
+			text += `Changed files:\n`;
+			for (const change of gitChanges) {
+				const statusLabel = change.status === "modified" ? "modified" : change.status === "deleted" ? "⚠️ deleted" : "new";
+				text += `  - \`${change.path}\` (${statusLabel})\n`;
+			}
+			text += "\n";
+
+			if (chaptersIndex) {
+				const driftResult = detectDriftViaGit(chaptersIndex, gitChanges);
+				const { outdatedChapters, upToDateChapters } = driftResult;
+
+				if (outdatedChapters.length > 0) {
+					text += `### Outdated Chapters (${outdatedChapters.length})\n\n`;
+					for (const ch of outdatedChapters) {
+						text += `**${ch.title}** (\`${ch.id}\`)\n`;
+						for (const f of ch.changedFiles) {
+							text += `  - \`${f.path}\` (${f.status})\n`;
+						}
+						text += "\n";
+					}
 				}
-				text += "\n";
+
+				if (upToDateChapters.length > 0) {
+					text += `Up-to-date chapters: ${upToDateChapters.map(ch => ch.title).join(", ")}\n`;
+				}
+
+				text += `\nUse /tutorial:update ${tutorialDir} to regenerate outdated chapters.`;
+
+				return {
+					content: [{ type: "text", text }],
+					details: {
+						outdatedCount: driftResult.outdatedChapters.length,
+						upToDateCount: driftResult.upToDateChapters.length,
+						basedOnCommit: baseCommit,
+						currentCommit,
+						outdatedChapters: driftResult.outdatedChapters,
+						upToDateChapters: driftResult.upToDateChapters,
+					},
+				};
+			} else {
+				text += `**Note**: No ${CHAPTERS_FILENAME} found. Chapter-level drift detection unavailable.\n\n`;
+				text += `Consider creating a ${CHAPTERS_FILENAME} to enable chapter-level detection.`;
+
+				return {
+					content: [{ type: "text", text }],
+					details: {
+						outdatedCount: -1,
+						upToDateCount: -1,
+						basedOnCommit: baseCommit,
+						currentCommit,
+						changedFiles: gitChanges,
+					},
+				};
 			}
-
-			if (upToDateChapters.length > 0) {
-				text += `Up-to-date chapters: ${upToDateChapters.map(ch => ch.title).join(", ")}\n`;
-			}
-
-			text += `\nUse /tutorial:update ${targetDir} to regenerate outdated chapters, or update them manually and refresh the manifest hashes.`;
-
-			return {
-				content: [{ type: "text", text }],
-				details: {
-					outdatedCount: outdatedChapters.length,
-					upToDateCount: upToDateChapters.length,
-					outdatedChapters,
-					upToDateChapters,
-				},
-			};
 		},
 
 		renderCall(args, theme) {
-			const target = args.targetDir as string || "(unset)";
+			const target = args.tutorialDir as string || "(unset)";
 			return {
 				render(_width: number) {
 					return [
@@ -481,78 +874,6 @@ function registerCheckTutorialDriftTool(pi: ExtensionAPI) {
 	});
 }
 
-// ─── Drift Detection Logic ──────────────────────────────────────────
-
-interface ChangedFile {
-	path: string;
-	status: "modified" | "deleted" | "new";
-}
-
-interface OutdatedChapter {
-	id: string;
-	title: string;
-	changedFiles: ChangedFile[];
-}
-
-interface UpToDateChapter {
-	id: string;
-	title: string;
-}
-
-interface DriftResult {
-	outdatedChapters: OutdatedChapter[];
-	upToDateChapters: UpToDateChapter[];
-}
-
-function detectDrift(manifest: TutorialManifest): DriftResult {
-	const outdatedChapters: OutdatedChapter[] = [];
-	const upToDateChapters: UpToDateChapter[] = [];
-
-	for (const chapter of manifest.chapters) {
-		const changedFiles: ChangedFile[] = [];
-
-		for (const entry of chapter.sourceFiles) {
-			const fullPath = path.resolve(manifest.sourceDir, entry.path);
-
-			if (!existsSync(fullPath)) {
-				changedFiles.push({ path: entry.path, status: "deleted" });
-				continue;
-			}
-
-			try {
-				const contents = readFileSync(fullPath, "utf-8");
-				const currentHash = hashContent(contents);
-				if (currentHash !== entry.hash) {
-					changedFiles.push({ path: entry.path, status: "modified" });
-				}
-			} catch {
-				changedFiles.push({ path: entry.path, status: "modified" });
-			}
-		}
-
-		if (changedFiles.length > 0) {
-			outdatedChapters.push({
-				id: chapter.id,
-				title: chapter.title,
-				changedFiles,
-			});
-		} else {
-			upToDateChapters.push({
-				id: chapter.id,
-				title: chapter.title,
-			});
-		}
-	}
-
-	return { outdatedChapters, upToDateChapters };
-}
-
-// ─── Manifest Utilities ─────────────────────────────────────────────
-
-function hashContent(content: string): string {
-	return crypto.createHash("sha256").update(content, "utf-8").digest("hex");
-}
-
 // ─── Prompt Builder ─────────────────────────────────────────────────
 
 async function gatherRequirementsAndPrompt(
@@ -567,7 +888,7 @@ async function gatherRequirementsAndPrompt(
 		// In quick mode, provide a shorter prompt
 		pi.sendUserMessage(`Create an interactive tutorial for the codebase.
 
-**Target Directory**: ${config.targetDir}
+**Target Directory**: ${config.tutorialDir}
 **Source Codebase**: ${config.sourceDir}
 **Project Name**: ${config.projectName}
 
@@ -575,7 +896,7 @@ Please follow these steps:
 
 1. Explore the source codebase structure at "${config.sourceDir}"
 2. Identify the architecture pattern (clean architecture, MVC, modular, etc.)
-3. Create the tutorial project in "${config.targetDir}" with:
+3. Create the tutorial project in "${config.tutorialDir}" with:
    - ${config.techStack === "react" ? "Vite + React + TypeScript" : config.techStack}
    - Clean navigation with sidebar
    - Progress tracking
@@ -590,11 +911,15 @@ Please follow these steps:
    - Use prism-react-renderer with the vsLight theme for syntax highlighting in code blocks
 ${config.includeQuizzes ? "5. Add knowledge-check quizzes to each chapter" : ""}
 ${config.includeDiagrams ? "6. Include SVG diagrams for architecture and code flow" : ""}
-7. Create a \`${MANIFEST_FILENAME}\` file in the tutorial root:
-   - For each chapter, record the chapter id, title, and every source file it references
-   - For each source file, store its relative path (relative to "${config.sourceDir}") and its SHA-256 hash
+7. Create a \`${CHAPTERS_FILENAME}\` file in the tutorial root:
+   - For each chapter, record the chapter id, title, and list of source files it references
+   - Use relative paths from "${config.sourceDir}"
    - This enables drift detection via \`/tutorial:update\` later
-8. Test that the tutorial builds and runs correctly`);
+8. Create a \`README.md\` file with:
+   - Project Details section (Source Project, Source Location, Based On Commit)
+   - Table of Contents placeholder
+   - Update History table (initial entry: version 1.0.0, "Initial tutorial creation")
+9. Test that the tutorial builds and runs correctly`);
 	} else {
 		pi.sendUserMessage(prompt);
 	}
@@ -603,7 +928,7 @@ ${config.includeDiagrams ? "6. Include SVG diagrams for architecture and code fl
 function buildTutorialPrompt(config: TutorialConfig): string {
 	return `Create an interactive tutorial for the codebase at "${config.sourceDir}".
 
-The tutorial should be created in "${config.targetDir}".
+The tutorial should be created in "${config.tutorialDir}".
 
 ## Configuration
 
@@ -660,25 +985,19 @@ ${config.includeDiagrams ? `- Architecture diagram (SVG) showing layers/modules
 - Proper spacing and accessibility (44px touch targets)
 - Hover/focus states for all interactive elements
 
-### 6. Drift Detection Manifest
+### 6. Chapters Index
 
-After creating all chapters, generate a \`${MANIFEST_FILENAME}\` file in the tutorial root directory with the following structure:
+After creating all chapters, generate a \`${CHAPTERS_FILENAME}\` file in the tutorial root directory with the following structure:
 
 \`\`\`json
 {
   "version": 1,
-  "createdAt": "<ISO timestamp>",
   "updatedAt": "<ISO timestamp>",
-  "sourceDir": "${config.sourceDir}",
-  "config": { <the full tutorial config> },
   "chapters": [
     {
       "id": "<kebab-case-chapter-id>",
       "title": "<chapter title>",
-      "sourceFiles": [
-        { "path": "<relative path from sourceDir>", "hash": "<sha-256 hex>" },
-        ...
-      ]
+      "sourceFiles": ["relative/path/file1.ts", "relative/path/file2.ts", "src/utils/*.ts"]
     },
     ...
   ]
@@ -686,20 +1005,59 @@ After creating all chapters, generate a \`${MANIFEST_FILENAME}\` file in the tut
 \`\`\`
 
 For each chapter, list every source file that is referenced or shown in code snippets.
-Compute the SHA-256 hash of each file's contents at creation time.
-This manifest enables \`/tutorial:update\` to detect drift between the tutorial content and the current source code.
+Use relative paths from "${config.sourceDir}".
+Support glob patterns for matching multiple files (e.g., "src/services/*.ts").
+This index enables \`/tutorial:update\` to detect drift between the tutorial content and the current source code using git.
+
+### 7. Project README
+
+Create a \`README.md\` file in the tutorial root directory with the following structure:
+
+\`\`\`markdown
+# ${config.projectName} - Tutorial
+
+## Project Details
+
+| Property | Value |
+|----------|-------|
+| **Source Project** | ${inferProjectName(config.sourceDir)} |
+| **Source Location** | \`${config.sourceDir}\` |
+| **Based On Commit** | \`<current git commit hash from sourceDir>\` (Tutorial covers features and code up to this commit) |
+
+---
+
+## Table of Contents
+
+<!-- AUTO-GENERATED: Chapters will be listed here -->
+
+---
+
+## Update History
+
+| Date | Version | Update Details |
+|------|---------|----------------|
+| YYYY-MM-DD | 1.0.0 | Initial tutorial creation |
+
+---
+
+*This README is automatically generated. For interactive tutorial experience, run the tutorial app.*
+\`\`\`
+
+- Get the current git commit hash from the source directory using: \`git -C "${config.sourceDir}" rev-parse HEAD\`
+- Leave "<!-- AUTO-GENERATED: Chapters will be listed here -->" as a placeholder; the user can update this manually
 
 ## Process
 
 1. **Explore**: Analyze the source codebase at "${config.sourceDir}"
 2. **Identify**: Determine the architecture pattern (clean architecture, MVC, modular, etc.)
-3. **Scaffold**: Create the tutorial project structure in "${config.targetDir}"
+3. **Scaffold**: Create the tutorial project structure in "${config.tutorialDir}"
 4. **Write**: Create chapter content based on the codebase analysis
 5. **Add Interactive Elements**: ${config.includeDiagrams ? "Diagrams, " : ""}${config.includeQuizzes ? "Quizzes, " : ""}Navigation
-6. **Generate Manifest**: Create \`${MANIFEST_FILENAME}\` with file hashes for drift detection
-7. **Test**: Ensure the tutorial builds and runs correctly
+6. **Generate Chapters Index**: Create \`${CHAPTERS_FILENAME}\` with chapter-to-files mapping
+7. **Create README**: Generate \`README.md\` with Project Details, Table of Contents, and Update History sections
+8. **Test**: Ensure the tutorial builds and runs correctly
 
-Please start by exploring the source codebase at "${config.sourceDir}" and then create the tutorial in "${config.targetDir}".`;
+Please start by exploring the source codebase at "${config.sourceDir}" and then create the tutorial in "${config.tutorialDir}".`;
 }
 
 // ─── Utility Functions ──────────────────────────────────────────────
@@ -786,7 +1144,7 @@ async function createTutorialTodos(pi: ExtensionAPI, config: TutorialConfig, ctx
 
 	// Fall back to TODO.md file in the target directory
 	try {
-		const todoPath = path.resolve(ctx.cwd, config.targetDir, "TODO.md");
+		const todoPath = path.resolve(ctx.cwd, config.tutorialDir, "TODO.md");
 		const todoDir = path.dirname(todoPath);
 
 		// Ensure the target directory exists
@@ -820,7 +1178,7 @@ function generateTodoItems(config: TutorialConfig): TodoItem[] {
 		{
 			title: "Create tutorial project scaffold",
 			tags: ["tutorial", "setup"],
-			body: `Set up the ${config.techStack} project in ${config.targetDir} with Vite, TypeScript, prism-react-renderer (vsLight theme for syntax highlighting), and the required dependencies for navigation.`,
+			body: `Set up the ${config.techStack} project in ${config.tutorialDir} with Vite, TypeScript, prism-react-renderer (vsLight theme for syntax highlighting), and the required dependencies for navigation.`,
 		},
 		{
 			title: "Implement navigation and layout",
@@ -863,11 +1221,18 @@ function generateTodoItems(config: TutorialConfig): TodoItem[] {
 		body: "Document the TypeScript patterns, interfaces, and types used in the codebase.",
 	});
 
-	// Add manifest generation todo
+	// Add chapters index generation todo
 	items.push({
-		title: "Generate drift detection manifest",
+		title: "Generate chapters index",
 		tags: ["tutorial", "setup"],
-		body: `Create a ${MANIFEST_FILENAME} file in the tutorial root that records each chapter's referenced source files and their SHA-256 hashes. This enables /tutorial:update to detect drift.`,
+		body: `Create a ${CHAPTERS_FILENAME} file that maps each chapter to its source files. This enables /tutorial:update to detect drift using git.`,
+	});
+
+	// Add README generation todo
+	items.push({
+		title: "Create project README",
+		tags: ["tutorial", "setup"],
+		body: `Create a README.md file with Project Details (Source Project, Source Location, Based On Commit), Table of Contents placeholder, and Update History table.`,
 	});
 
 	// Add quizzes if enabled
@@ -905,7 +1270,7 @@ function buildTodoMdContent(items: TodoItem[], config: TutorialConfig): string {
 		"",
 		"## Overview",
 		"",
-		`- **Target Directory**: ${config.targetDir}`,
+		`- **Target Directory**: ${config.tutorialDir}`,
 		`- **Source Codebase**: ${config.sourceDir}`,
 		`- **Target Audience**: ${config.audience}`,
 		`- **Scope**: ${config.scope}`,
