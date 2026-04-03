@@ -22,14 +22,26 @@ pi
 
 The agent will automatically discover and load the skill based on its description.
 
-### 2. Install the PDF Extractor Application
+### 2. Clone the PDF Extractor Application
 
-Use the setup script to install the PDF Extractor Analyzer:
+If you don't already have the PDF Extractor Analyzer locally, clone it from GitHub:
+
+```bash
+git clone https://github.com/yogibear54/ai-pdf-extractor ~/path/where/you/want/it
+```
+
+> **Note:** Replace `~/path/where/you/want/it` with your desired installation directory. You'll point the setup script to this location in the next step.
+
+### 3. Run the Setup Script
+
+Use the setup script to install dependencies and configure the PDF Extractor Analyzer:
 
 ```bash
 cd ~/.pi/agent/skills/pdf-extractor
-./scripts/setup.sh
+./scripts/setup.sh --dir ~/path/where/you/cloned/it
 ```
+
+The `--dir` flag tells the setup script where to find the cloned repository. If you omit it, the script will check common locations or prompt you interactively.
 
 #### Setup Options
 
@@ -71,7 +83,7 @@ Or use the setup script:
 ./scripts/setup.sh --create-config
 ```
 
-### 3. Configure API Credentials
+### 4. Configure API Credentials
 
 Choose your preferred LLM provider:
 
@@ -89,7 +101,7 @@ Choose your preferred LLM provider:
    export OPENROUTER_API_KEY="your_key_here"
    ```
 
-### 4. Reload pi (if running)
+### 5. Reload pi (if running)
 
 If pi is already running, reload to discover the skill:
 
