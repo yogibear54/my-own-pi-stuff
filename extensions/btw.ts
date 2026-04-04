@@ -11,6 +11,7 @@ import {
 	type ExtensionCommandContext,
 	type ExtensionContext,
 	type ResourceLoader,
+	type SessionEntry,
 } from "@mariozechner/pi-coding-agent";
 import { type AssistantMessage, type Message, type ThinkingLevel as AiThinkingLevel } from "@mariozechner/pi-ai";
 import {
@@ -27,6 +28,7 @@ import {
 
 const BTW_ENTRY_TYPE = "btw-thread-entry";
 const BTW_RESET_TYPE = "btw-thread-reset";
+const BTW_CONFIG_TYPE = "btw-config";
 
 const BTW_SYSTEM_PROMPT = [
 	"You are BTW, a side-channel assistant embedded in the user's coding agent.",
@@ -39,6 +41,36 @@ const BTW_SUMMARY_PROMPT =
 	"Summarize this side conversation for handoff into the main conversation. Keep key decisions, findings, risks, and next actions. Output only the summary.";
 
 type SessionThinkingLevel = "off" | AiThinkingLevel;
+
+type BtwThinkingLevel = "default" | SessionThinkingLevel;
+
+interface BtwDisplayConfig {
+	showReasoning: boolean;
+	showReasoningEmoji: string;
+	showAnswerEmoji: string;
+	showToolCalls: boolean;
+	showToolCallEmoji: string;
+	showToolResultEmoji: string;
+}
+
+interface BtwConfig {
+	thinkingLevel: BtwThinkingLevel;
+	display: BtwDisplayConfig;
+}
+
+const DEFAULT_DISPLAY_CONFIG: BtwDisplayConfig = {
+	showReasoning: false,
+	showReasoningEmoji: "🧠",
+	showAnswerEmoji: "💫",
+	showToolCalls: true,
+	showToolCallEmoji: "🔧",
+	showToolResultEmoji: "📋",
+};
+
+const DEFAULT_CONFIG: BtwConfig = {
+	thinkingLevel: "default",
+	display: { ...DEFAULT_DISPLAY_CONFIG },
+};
 
 type BtwDetails = {
 	question: string;
@@ -129,8 +161,8 @@ function extractEventAssistantText(message: unknown): string {
 }
 
 function getLastAssistantMessage(session: AgentSession): AssistantMessage | null {
-	for (let i = session.state.messages.length - 1; i >= 0; i--) {
-		const message = session.state.messages[i];
+	for (let i = session.messages.length - 1; i >= 0; i--) {
+		const message = session.messages[i];
 		if (message.role === "assistant") {
 			return message as AssistantMessage;
 		}
@@ -330,6 +362,9 @@ export default function (pi: ExtensionAPI) {
 	let activeSideSession: SideSessionRuntime | null = null;
 	let overlayRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
+	// Config state - persisted in session
+	let config: BtwConfig = { ...DEFAULT_CONFIG };
+
 	const mdTheme = getMarkdownTheme();
 
 	function getModelKey(ctx: ExtensionContext): string {
@@ -375,9 +410,10 @@ export default function (pi: ExtensionAPI) {
 	function renderToolCallLines(toolCalls: ToolCallInfo[], theme: ExtensionContext["ui"]["theme"], width: number): string[] {
 		const lines: string[] = [];
 		for (const tc of toolCalls) {
-			const icon = tc.status === "running" ? "⚙" : tc.status === "error" ? "✗" : "✓";
-			const color = tc.status === "error" ? "error" : tc.status === "done" ? "success" : "dim";
-			const label = theme.fg(color, `${icon} `) + theme.fg("toolTitle", tc.toolName);
+			const statusIcon = tc.status === "running" ? "⚙" : tc.status === "error" ? "✗" : "✓";
+			const statusColor = tc.status === "error" ? "error" : tc.status === "done" ? "success" : "dim";
+			const emoji = config.display.showToolCallEmoji;
+			const label = theme.fg(statusColor, `${statusIcon} `) + theme.fg("toolTitle", `${emoji}${tc.toolName}`);
 			const argsText = tc.args ? theme.fg("dim", ` ${tc.args}`) : "";
 			lines.push(truncateToWidth(`  ${label}${argsText}`, width, ""));
 		}
@@ -399,23 +435,24 @@ export default function (pi: ExtensionAPI) {
 
 		const lines: string[] = [];
 		for (const item of thread.slice(-6)) {
-			// User message
-			const userText = item.question.trim().split("\n")[0];
-			lines.push(theme.fg("accent", theme.bold("You: ")) + truncateToWidth(userText, width - 5, "…"));
-			lines.push("");
+				// User message
+				const userText = item.question.trim().split("\n")[0];
+				lines.push(theme.fg("accent", theme.bold("You: ")) + truncateToWidth(userText, width - 5, "…"));
+				lines.push("");
 
-			// Assistant message rendered as markdown
-			const mdLines = renderMarkdownLines(item.answer, width);
-			lines.push(...mdLines);
-			lines.push("");
-		}
+				// Assistant message rendered as markdown
+				const answerPrefix = config.display.showAnswerEmoji ? `${config.display.showAnswerEmoji} ` : "";
+				const mdLines = renderMarkdownLines(`${answerPrefix}${item.answer}`, width);
+				lines.push(...mdLines);
+				lines.push("");
+			}
 
 		if (pendingQuestion) {
 			const userText = pendingQuestion.trim().split("\n")[0];
 			lines.push(theme.fg("accent", theme.bold("You: ")) + truncateToWidth(userText, width - 5, "…"));
 
-			// Show tool calls inline
-			if (pendingToolCalls.length > 0) {
+			// Show tool calls inline if enabled
+			if (config.display.showToolCalls && pendingToolCalls.length > 0) {
 				lines.push(...renderToolCallLines(pendingToolCalls, theme, width));
 			}
 
@@ -423,9 +460,10 @@ export default function (pi: ExtensionAPI) {
 				lines.push(theme.fg("error", `❌ ${pendingError}`));
 			} else if (pendingAnswer) {
 				lines.push("");
-				const mdLines = renderMarkdownLines(pendingAnswer, width);
+				const answerPrefix = config.display.showAnswerEmoji ? `${config.display.showAnswerEmoji} ` : "";
+				const mdLines = renderMarkdownLines(`${answerPrefix}${pendingAnswer}`, width);
 				lines.push(...mdLines);
-			} else if (pendingToolCalls.length === 0) {
+			} else if (pendingToolCalls.length === 0 || !config.display.showToolCalls) {
 				lines.push(theme.fg("dim", "…"));
 			}
 		}
@@ -548,7 +586,41 @@ export default function (pi: ExtensionAPI) {
 			thread.push(details);
 		}
 
+		restoreConfig(ctx.sessionManager.getEntries());
 		syncOverlay();
+	}
+
+	function restoreConfig(entries: SessionEntry[]): void {
+		// Find the most recent config entry
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i];
+			if (entry.type === "custom" && entry.customType === BTW_CONFIG_TYPE) {
+				const saved = entry.data as BtwConfig | undefined;
+				if (saved) {
+					config = {
+						thinkingLevel: saved.thinkingLevel ?? DEFAULT_CONFIG.thinkingLevel,
+						display: {
+							...DEFAULT_DISPLAY_CONFIG,
+							...saved.display,
+						},
+					};
+					return;
+					}
+			}
+		}
+		// No config found, use defaults
+		config = { ...DEFAULT_CONFIG };
+	}
+
+	function saveConfig(): void {
+		pi.appendEntry(BTW_CONFIG_TYPE, config);
+	}
+
+	function getEffectiveThinkingLevel(ctx: ExtensionContext | ExtensionCommandContext): SessionThinkingLevel {
+		if (config.thinkingLevel === "default") {
+			return pi.getThinkingLevel() as SessionThinkingLevel;
+		}
+		return config.thinkingLevel;
 	}
 
 	async function createSideSession(ctx: ExtensionCommandContext): Promise<SideSessionRuntime | null> {
@@ -560,14 +632,14 @@ export default function (pi: ExtensionAPI) {
 			sessionManager: SessionManager.inMemory(),
 			model: ctx.model,
 			modelRegistry: ctx.modelRegistry as AgentSession["modelRegistry"],
-			thinkingLevel: pi.getThinkingLevel() as SessionThinkingLevel,
+			thinkingLevel: getEffectiveThinkingLevel(ctx),
 			tools: codingTools,
 			resourceLoader: createBtwResourceLoader(ctx),
 		});
 
 		const seedMessages = buildSeedMessages(ctx, thread);
 		if (seedMessages.length > 0) {
-			session.agent.replaceMessages(seedMessages as typeof session.state.messages);
+			session.agent.state.messages = seedMessages;
 		}
 
 		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
@@ -873,7 +945,7 @@ export default function (pi: ExtensionAPI) {
 				timestamp: Date.now(),
 				provider: model.provider,
 				model: model.id,
-				thinkingLevel: pi.getThinkingLevel() as SessionThinkingLevel,
+				thinkingLevel: getEffectiveThinkingLevel(ctx),
 				usage: response.usage,
 			};
 			thread.push(details);
@@ -909,6 +981,116 @@ export default function (pi: ExtensionAPI) {
 
 		await runBtwPrompt(ctx, question);
 	}
+
+	const THINKING_LEVEL_OPTIONS: BtwThinkingLevel[] = ["default", "off", "minimal", "low", "medium", "high", "xhigh"];
+
+	function formatConfigStatus(): string {
+		const tl = config.thinkingLevel === "default" ? `default (currently ${pi.getThinkingLevel()})` : config.thinkingLevel;
+		return [
+			`Thinking Level: ${tl}`,
+			`Display:`,
+			`  Reasoning: ${config.display.showReasoning ? "shown" : "hidden"} (${config.display.showReasoningEmoji})`,
+			`  Answer: ${config.display.showAnswerEmoji}`,
+			`  Tool Calls: ${config.display.showToolCalls ? "shown" : "hidden"} (${config.display.showToolCallEmoji})`,
+			`  Tool Results: ${config.display.showToolResultEmoji}`,
+		].join("\n");
+	}
+
+	pi.registerCommand("btwconfig", {
+		description: "Configure BTW side-chat settings (thinking level, display options).",
+		handler: async (args, ctx) => {
+			if (!ctx.hasUI) {
+				return;
+			}
+
+			const choices = [
+				"Show current config",
+				"Set thinking level",
+				"Toggle reasoning display",
+				"Set reasoning emoji",
+				"Set answer emoji",
+				"Toggle tool calls display",
+				"Set tool call emoji",
+				"Set tool result emoji",
+				"Reset to defaults",
+			];
+
+			const choice = await ctx.ui.select("BTW Config", choices);
+			if (!choice) return;
+
+			switch (choice) {
+				case "Show current config":
+					await ctx.ui.notify(formatConfigStatus(), "info");
+					break;
+
+				case "Set thinking level": {
+					const tlChoice = await ctx.ui.select("Thinking Level", THINKING_LEVEL_OPTIONS);
+					if (!tlChoice) return;
+					config.thinkingLevel = tlChoice as BtwThinkingLevel;
+					saveConfig();
+					await ctx.ui.notify(`Thinking level set to: ${tlChoice}`, "success");
+					break;
+				}
+
+				case "Toggle reasoning display": {
+					config.display.showReasoning = !config.display.showReasoning;
+					saveConfig();
+					await ctx.ui.notify(`Reasoning display: ${config.display.showReasoning ? "shown" : "hidden"}`, "success");
+					break;
+				}
+
+				case "Set reasoning emoji": {
+					const emoji = await ctx.ui.input("Reasoning emoji", { default: config.display.showReasoningEmoji });
+					if (emoji === undefined) return;
+					config.display.showReasoningEmoji = emoji || "🧠";
+					saveConfig();
+					await ctx.ui.notify(`Reasoning emoji set to: ${config.display.showReasoningEmoji}`, "success");
+					break;
+				}
+
+				case "Set answer emoji": {
+					const emoji = await ctx.ui.input("Answer emoji", { default: config.display.showAnswerEmoji });
+					if (emoji === undefined) return;
+					config.display.showAnswerEmoji = emoji || "💫";
+					saveConfig();
+					await ctx.ui.notify(`Answer emoji set to: ${config.display.showAnswerEmoji}`, "success");
+					break;
+				}
+
+				case "Toggle tool calls display": {
+					config.display.showToolCalls = !config.display.showToolCalls;
+					saveConfig();
+					await ctx.ui.notify(`Tool calls display: ${config.display.showToolCalls ? "shown" : "hidden"}`, "success");
+					break;
+				}
+
+				case "Set tool call emoji": {
+					const emoji = await ctx.ui.input("Tool call emoji", { default: config.display.showToolCallEmoji });
+					if (emoji === undefined) return;
+					config.display.showToolCallEmoji = emoji || "🔧";
+					saveConfig();
+					await ctx.ui.notify(`Tool call emoji set to: ${config.display.showToolCallEmoji}`, "success");
+					break;
+				}
+
+				case "Set tool result emoji": {
+					const emoji = await ctx.ui.input("Tool result emoji", { default: config.display.showToolResultEmoji });
+					if (emoji === undefined) return;
+					config.display.showToolResultEmoji = emoji || "📋";
+					saveConfig();
+					await ctx.ui.notify(`Tool result emoji set to: ${config.display.showToolResultEmoji}`, "success");
+					break;
+				}
+
+				case "Reset to defaults":
+					config = { ...DEFAULT_CONFIG };
+					config.display = { ...DEFAULT_DISPLAY_CONFIG };
+					saveConfig();
+					await ctx.ui.notify("Config reset to defaults", "success");
+					break;
+			}
+		},
+	});
 
 	pi.registerCommand("btw", {
 		description: "Open a simple BTW side-chat popover. `/btw <text>` asks immediately, `/btw` opens the side thread.",

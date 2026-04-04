@@ -455,8 +455,8 @@ export default function (pi: ExtensionAPI) {
 				loader.onAbort = () => done(null);
 
 				const doExtract = async () => {
-					const { apiKey } = await ctx.modelRegistry.getApiKeyAndHeaders(extractionModel);
-					if (!apiKey) {
+					const auth = await ctx.modelRegistry.getApiKeyAndHeaders(extractionModel);
+					if (!auth.ok) {
 						throw new Error(`No credentials available for ${extractionModel.provider}/${extractionModel.id}.`);
 					}
 					const userMessage: UserMessage = {
@@ -468,7 +468,7 @@ export default function (pi: ExtensionAPI) {
 					const response = await complete(
 						extractionModel,
 						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-						{ apiKey, signal: loader.signal },
+						{ apiKey: auth.apiKey, headers: auth.headers, signal: loader.signal },
 					);
 
 					if (response.stopReason === "aborted") {
