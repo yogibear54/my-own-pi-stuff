@@ -5,8 +5,9 @@
  * codebase tutorials:
  *
  * Commands:
- *   /tutorial:create <tutorial-dir> [source-code-dir]   # Create a new tutorial
+ *   /tutorial:create <tutorial-dir> [source-code-dir]   # Create a skeleton tutorial (Pass 1)
  *   /tutorial:create                              # Interactive mode
+ *   /tutorial:deep-dive <tutorial-dir> [chapter-id]  # Deep-dive expand chapters (Pass 2)
  *   /tutorial:update <tutorial-dir>                 # Detect drift & update outdated chapters
  *
  * The extension also registers tools:
@@ -44,6 +45,7 @@ interface TutorialConfig {
 interface ChaptersIndex {
 	version: number;
 	updatedAt: string;
+	config?: TutorialConfig;
 	chapters: ChapterEntry[];
 }
 
@@ -51,6 +53,7 @@ interface ChapterEntry {
 	id: string;
 	title: string;
 	sourceFiles: string[]; // relative paths from sourceDir
+	chapterFile?: string;  // relative path to chapter component in tutorialDir
 }
 
 interface ReadmeContent {
@@ -90,6 +93,7 @@ const README_FILENAME = "README.md";
 
 export default function createTutorialExtension(pi: ExtensionAPI) {
 	registerTutorialCreateCommand(pi);
+	registerTutorialDeepDiveCommand(pi);
 	registerTutorialUpdateCommand(pi);
 	registerConfigureTutorialTool(pi);
 	registerCheckTutorialDriftTool(pi);
@@ -282,7 +286,7 @@ function readFileSync(filePath: string, encoding: BufferEncoding): string {
 
 function registerTutorialCreateCommand(pi: ExtensionAPI) {
 	pi.registerCommand("tutorial:create", {
-		description: "Create an interactive tutorial for a codebase",
+		description: "Create a skeleton tutorial (Pass 1). Use /tutorial:deep-dive for Pass 2 expansion. Usage: /tutorial:create <tutorial-dir> [source-code-dir]",
 		handler: async (args, ctx) => {
 			const argParts = (args || "").trim().split(/\s+/).filter(Boolean);
 
@@ -325,6 +329,120 @@ function registerTutorialCreateCommand(pi: ExtensionAPI) {
 
 Or use quick mode: /tutorial:create <tutorial-dir> [source-code-dir]`, { deliverAs: "steer" });
 		},
+	});
+}
+
+// ─── /tutorial:deep-dive ────────────────────────────────────────────
+
+function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
+	const DEEP_DIVE_DESCRIPTION =
+		"Deep-dive into skeleton tutorial chapters with detailed analysis. " +
+		"Expands all chapters or a specific chapter. " +
+		"Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id]";
+
+	const DEEP_DIVE_TOOL_DESCRIPTION =
+		"Expand skeleton tutorial chapters with deep code analysis. " +
+		"Reads the skeleton created by /tutorial:create, deeply analyzes source files, " +
+	 "and expands chapter content with detailed walkthroughs, quizzes, and diagrams. " +
+		"Call when the user wants to deepen tutorial content.";
+
+	// Register the command
+	const handler = async (args: string, ctx: ExtensionContext) => {
+		const argParts = (args || "").trim().split(/\s+/).filter(Boolean);
+
+		if (argParts.length < 1) {
+			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id]", "error");
+			return;
+		}
+
+		const tutorialDir = argParts[0];
+		const chapterId = argParts[1] || null;
+
+		// Load chapters index
+		const chaptersIndex = loadChaptersIndex(tutorialDir);
+		if (!chaptersIndex || chaptersIndex.chapters.length === 0) {
+			const readme = parseReadme(tutorialDir);
+			const hasReadme = !!readme;
+			const sourceInfo = readme?.sourceDir ? `\nFound README.md with source at \`${readme.sourceDir}\`.` : "\nNo README.md found either.";
+
+			ctx.ui.notify(
+				`No ${CHAPTERS_FILENAME} found in "${tutorialDir}".`,
+				"error",
+			);
+			pi.sendUserMessage(
+				`No ${CHAPTERS_FILENAME} found in "${tutorialDir}".\n\n` +
+				`Deep-dive requires a skeleton tutorial created with \`/tutorial:create\`.\n\n` +
+				`Please run \`/tutorial:create ${tutorialDir}\` first to create the skeleton tutorial.` +
+				sourceInfo,
+				{ deliverAs: "steer" },
+			);
+			return;
+		}
+
+		// Get config from chapters index or infer from README
+		const config = chaptersIndex.config;
+
+		let sourceDir: string;
+		if (config?.sourceDir) {
+			sourceDir = config.sourceDir;
+		} else {
+			const readme = parseReadme(tutorialDir);
+			if (readme?.sourceDir) {
+				sourceDir = readme.sourceDir;
+			} else {
+				pi.sendUserMessage(
+					`Cannot determine source codebase location for tutorial at "${tutorialDir}".\n\n` +
+					`The ${CHAPTERS_FILENAME} doesn't have a config section with sourceDir, and no README.md was found.\n\n` +
+					`Please either:\n` +
+					`- Re-create the tutorial with \`/tutorial:create\` (which saves config to chapters.json)\n` +
+					`- Or add a \"config\" section to ${CHAPTERS_FILENAME} with the \"sourceDir\" field`,
+					{ deliverAs: "steer" },
+				);
+				return;
+			}
+		}
+
+		// Filter chapters if a specific chapter ID is provided
+		let targetChapters: ChapterEntry[];
+		if (chapterId) {
+			const normalizedId = chapterId.toLowerCase().replace(/\s+/g, "-");
+			const target = chaptersIndex.chapters.find(
+				ch => ch.id === chapterId || ch.id === normalizedId,
+			);
+			if (!target) {
+				const available = chaptersIndex.chapters
+					.map(ch => `  - \`${ch.id}\` → ${ch.title}`)
+					.join("\n");
+				ctx.ui.notify(`Chapter "${chapterId}" not found.`, "error");
+				pi.sendUserMessage(
+					`Chapter \`${chapterId}\` not found in "${tutorialDir}".\n\n` +
+					`Available chapters:\n${available}\n\n` +
+					`Usage: /tutorial:deep-dive ${tutorialDir} <chapter-id>`,
+					{ deliverAs: "steer" },
+				);
+				return;
+			}
+			targetChapters = [target];
+		} else {
+			targetChapters = chaptersIndex.chapters;
+		}
+
+		// Notify the user
+		const chapterCount = targetChapters.length;
+		const isSingle = chapterCount === 1;
+		ctx.ui.notify(
+			`🔍 Deep diving ${isSingle ? `chapter: ${targetChapters[0].title}` : `${chapterCount} chapters`}...`,
+			"info",
+		);
+
+		// Build and send the deep-dive prompt
+		const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, targetChapters, config);
+		pi.sendUserMessage(prompt);
+	};
+
+	pi.registerCommand("tutorial:deep-dive", {
+		description: DEEP_DIVE_DESCRIPTION,
+		handler,
 	});
 }
 
@@ -613,7 +731,7 @@ function registerConfigureTutorialTool(pi: ExtensionAPI) {
 			// Build config
 			const config: TutorialConfig = {
 				tutorialDir: params.tutorialDir,
-				sourceDir: params.sourceCodeDir || ctx.cwd,
+				sourceDir: params.sourceDir || ctx.cwd,
 				projectName: params.projectName || inferProjectName(params.tutorialDir),
 				audience: params.audience || "Developers familiar with JavaScript but new to TypeScript",
 				goals: params.goals || ["Navigate the codebase", "Understand architecture patterns"],
@@ -630,7 +748,9 @@ function registerConfigureTutorialTool(pi: ExtensionAPI) {
 			const todoResult = await createTutorialTodos(pi, config, ctx);
 
 			// Build the response text
-			let responseText = `Tutorial configuration complete. Now analyze the codebase and create the tutorial.
+			let responseText = `Tutorial configuration complete. Now analyze the codebase and create a SKELETON tutorial (Pass 1).
+
+The skeleton will be expanded with detailed content in Pass 2 via \`/tutorial:deep-dive\`.
 
 Configuration:
 - Target: ${config.tutorialDir}
@@ -886,49 +1006,59 @@ async function gatherRequirementsAndPrompt(
 
 	if (quickMode) {
 		// In quick mode, provide a shorter prompt
-		pi.sendUserMessage(`Create an interactive tutorial for the codebase.
+			pi.sendUserMessage(`Create a SKELETON tutorial for the codebase (Pass 1 of 2).
 
 **Target Directory**: ${config.tutorialDir}
 **Source Codebase**: ${config.sourceDir}
 **Project Name**: ${config.projectName}
 
+This is a SURFACE ANALYSIS pass. Create a working tutorial app with MINIMAL chapter content.
+The chapters will be expanded with detailed analysis in Pass 2 via \`/tutorial:deep-dive\`.
+
 Please follow these steps:
 
 1. Explore the source codebase structure at "${config.sourceDir}"
-2. Identify the architecture pattern (clean architecture, MVC, modular, etc.)
-3. Create the tutorial project in "${config.tutorialDir}" with:
+   - Map out the directory tree and key files
+   - Identify the architecture pattern (clean architecture, MVC, modular, etc.)
+   - Note the main modules and their purposes
+
+2. Create the tutorial project in "${config.tutorialDir}" with:
    - ${config.techStack === "react" ? "Vite + React + TypeScript" : config.techStack}
    - Clean navigation with sidebar
-   - Progress tracking
+   - Progress tracking (localStorage)
    - Syntax highlighting (prism-react-renderer with vsLight theme)
-4. Write chapters covering:
-   - Architecture overview
-   - Key modules and their purposes
-   - Data flow
-   - TypeScript patterns
-   - Entry points and configuration
-   - Body text should use Noto Sans font, code blocks should use Source Code Pro font
-   - Use prism-react-renderer with the vsLight theme for syntax highlighting in code blocks
-${config.includeQuizzes ? "5. Add knowledge-check quizzes to each chapter" : ""}
-${config.includeDiagrams ? "6. Include SVG diagrams for architecture and code flow" : ""}
-7. Create a \`${CHAPTERS_FILENAME}\` file in the tutorial root:
-   - For each chapter, record the chapter id, title, and list of source files it references
-   - Use relative paths from "${config.sourceDir}"
-   - This enables drift detection via \`/tutorial:update\` later
-8. Create a \`README.md\` file with:
-   - Project Details section (Source Project, Source Location, Based On Commit)
-   - Table of Contents placeholder
-   - Update History table (initial entry: version 1.0.0, "Initial tutorial creation")
-9. Test that the tutorial builds and runs correctly`);
+   - Noto Sans font for body text, Source Code Pro for code blocks
+
+3. Create SKELETON chapters — each chapter should have:
+   - Title and 1-2 paragraph overview (surface-level description only)
+   - "Files Covered" section listing relevant source files with full paths
+   - A note: "🔍 This chapter will be expanded with detailed analysis via deep-dive."
+   - DO NOT write detailed code walkthroughs, quizzes, or diagrams — that is Pass 2
+
+4. Create a \`${CHAPTERS_FILENAME}\` file in the tutorial root with:
+   - A \"config\" object containing: sourceDir, projectName, audience, goals, scope, includeQuizzes, includeDiagrams, techStack
+   - For each chapter: id, title, sourceFiles (relative paths from "${config.sourceDir}"), chapterFile (path to chapter component relative to tutorialDir)
+   - Support glob patterns in sourceFiles (e.g., "src/utils/*.ts")
+   - This enables \`/tutorial:deep-dive\` for expansion and \`/tutorial:update\` for drift detection
+
+5. Create a \`README.md\` file with:
+   - Project Details section (Source Project, Source Location, Based On Commit, Status)
+   - Table of Contents
+   - Update History table (initial entry: version 0.1.0, "Skeleton tutorial created (Pass 1)")
+
+6. Test that the tutorial builds and runs correctly`);
 	} else {
 		pi.sendUserMessage(prompt);
 	}
 }
 
 function buildTutorialPrompt(config: TutorialConfig): string {
-	return `Create an interactive tutorial for the codebase at "${config.sourceDir}".
+	return `Create a SKELETON tutorial (Pass 1 of 2) for the codebase at "${config.sourceDir}".
 
 The tutorial should be created in "${config.tutorialDir}".
+
+This is a SURFACE ANALYSIS pass. Produce a working tutorial app with minimal chapter content.
+The chapters will be expanded with detailed analysis in Pass 2 via \`/tutorial:deep-dive\`.
 
 ## Configuration
 
@@ -936,8 +1066,8 @@ The tutorial should be created in "${config.tutorialDir}".
 - **Target Audience**: ${config.audience}
 - **Learning Goals**: ${config.goals.join(", ")}
 - **Scope**: ${config.scope}
-- **Include Quizzes**: ${config.includeQuizzes ? "Yes" : "No"}
-- **Include Diagrams**: ${config.includeDiagrams ? "Yes" : "No"}
+- **Include Quizzes**: ${config.includeQuizzes ? "Yes (in Pass 2)" : "No"}
+- **Include Diagrams**: ${config.includeDiagrams ? "Yes (in Pass 2)" : "No"}
 - **Tech Stack**: ${config.techStack}
 
 ## Requirements
@@ -949,33 +1079,34 @@ Create a ${config.techStack === "react" ? "Vite + React + TypeScript" : config.t
 - Progress tracking (use localStorage)
 - Responsive design (mobile-friendly sidebar toggle)
 - Syntax-highlighted code blocks (using prism-react-renderer with vsLight theme)
+- Google Fonts: Noto Sans for body text, Source Code Pro for code blocks
 
-### 2. Content Creation
+### 2. Surface Analysis
 
-Analyze the source codebase and create chapters covering:
-- **Architecture Overview**: High-level structure with ${config.includeDiagrams ? "SVG diagrams" : "text descriptions"}
-- **Key Modules**: What each module does and its responsibilities
-- **Data Flow**: How data moves through the system
-- **TypeScript Patterns**: Types, interfaces, generics (if applicable)
-- **Configuration & Entry Points**: How the app boots and is configured
-${config.scope === "comprehensive" ? "- **All Files**: Complete coverage of every production file" : ""}
+Explore the source codebase and create SKELETON chapters covering:
+- **Architecture Overview**: High-level structure, directory tree, main modules
+- **Key Modules**: Brief description of what each module does
+- **Data Flow**: Surface-level description of how data moves
+- **TypeScript Patterns**: Note key types and interfaces (no deep analysis yet)
+- **Configuration & Entry Points**: List entry points and config files
+${config.scope === "comprehensive" ? "- **All Files**: Brief mention of every production file" : ""}
 
-### 3. Chapter Structure
+### 3. Skeleton Chapter Structure
 
 Each chapter should include:
-- Clear title and description
-- "Files Covered" section listing the relevant source files
-- Code snippets with syntax highlighting and explanations
-- ${config.includeQuizzes ? "Knowledge-check quiz with multiple-choice questions" : "Summary and key takeaways"}
+- Clear title and 1-2 paragraph overview
+- "Files Covered" section listing the relevant source files with paths
+- A placeholder note: "🔍 This chapter will be expanded with detailed analysis via deep-dive."
 - Navigation to next/previous chapter
+- DO NOT include: detailed code walkthroughs, quizzes, or diagrams (those are Pass 2)
 
-### 4. Interactive Elements
+### 4. Interactive Elements (Pass 1)
 
-${config.includeDiagrams ? `- Architecture diagram (SVG) showing layers/modules
-- Code flow visualization (step-by-step animation through the codebase)
-` : ""}${config.includeQuizzes ? `- Multiple-choice quizzes with explanations for correct answers
-` : ""}- Progress tracking with completion indicators
+- Progress tracking with completion indicators
 - "Continue where you left off" functionality
+- Clean sidebar navigation
+${config.includeQuizzes ? "- Quiz placeholder sections (to be filled in Pass 2)" : ""}
+${config.includeDiagrams ? "- Diagram placeholder sections (to be filled in Pass 2)" : ""}
 
 ### 5. Styling
 
@@ -987,31 +1118,42 @@ ${config.includeDiagrams ? `- Architecture diagram (SVG) showing layers/modules
 
 ### 6. Chapters Index
 
-After creating all chapters, generate a \`${CHAPTERS_FILENAME}\` file in the tutorial root directory with the following structure:
+After creating all chapters, generate a \`${CHAPTERS_FILENAME}\` file with:
 
 \`\`\`json
 {
   "version": 1,
   "updatedAt": "<ISO timestamp>",
+  "config": {
+    "tutorialDir": "${config.tutorialDir}",
+    "sourceDir": "${config.sourceDir}",
+    "projectName": "${config.projectName}",
+    "audience": "${config.audience}",
+    "goals": ${JSON.stringify(config.goals)},
+    "scope": "${config.scope}",
+    "includeQuizzes": ${config.includeQuizzes},
+    "includeDiagrams": ${config.includeDiagrams},
+    "techStack": "${config.techStack}"
+  },
   "chapters": [
     {
       "id": "<kebab-case-chapter-id>",
       "title": "<chapter title>",
-      "sourceFiles": ["relative/path/file1.ts", "relative/path/file2.ts", "src/utils/*.ts"]
-    },
-    ...
+      "sourceFiles": ["relative/path/file1.ts", "relative/path/file2.ts"],
+      "chapterFile": "src/chapters/ChapterName.tsx"
+    }
   ]
 }
 \`\`\`
 
-For each chapter, list every source file that is referenced or shown in code snippets.
-Use relative paths from "${config.sourceDir}".
-Support glob patterns for matching multiple files (e.g., "src/services/*.ts").
-This index enables \`/tutorial:update\` to detect drift between the tutorial content and the current source code using git.
+For each chapter:
+- \`sourceFiles\`: every source file referenced, relative to "${config.sourceDir}". Support glob patterns.
+- \`chapterFile\`: path to the chapter component file, relative to "${config.tutorialDir}"
+- This index enables \`/tutorial:deep-dive\` for chapter expansion and \`/tutorial:update\` for drift detection
 
 ### 7. Project README
 
-Create a \`README.md\` file in the tutorial root directory with the following structure:
+Create a \`README.md\`:
 
 \`\`\`markdown
 # ${config.projectName} - Tutorial
@@ -1022,7 +1164,8 @@ Create a \`README.md\` file in the tutorial root directory with the following st
 |----------|-------|
 | **Source Project** | ${inferProjectName(config.sourceDir)} |
 | **Source Location** | \`${config.sourceDir}\` |
-| **Based On Commit** | \`<current git commit hash from sourceDir>\` (Tutorial covers features and code up to this commit) |
+| **Based On Commit** | \`<git commit hash>\` |
+| **Status** | 🏗️ Skeleton (Pass 1) — use \`/tutorial:deep-dive\` to expand |
 
 ---
 
@@ -1036,28 +1179,135 @@ Create a \`README.md\` file in the tutorial root directory with the following st
 
 | Date | Version | Update Details |
 |------|---------|----------------|
-| YYYY-MM-DD | 1.0.0 | Initial tutorial creation |
+| YYYY-MM-DD | 0.1.0 | Skeleton tutorial created (Pass 1) |
 
 ---
 
 *This README is automatically generated. For interactive tutorial experience, run the tutorial app.*
 \`\`\`
 
-- Get the current git commit hash from the source directory using: \`git -C "${config.sourceDir}" rev-parse HEAD\`
-- Leave "<!-- AUTO-GENERATED: Chapters will be listed here -->" as a placeholder; the user can update this manually
-
 ## Process
 
-1. **Explore**: Analyze the source codebase at "${config.sourceDir}"
-2. **Identify**: Determine the architecture pattern (clean architecture, MVC, modular, etc.)
-3. **Scaffold**: Create the tutorial project structure in "${config.tutorialDir}"
-4. **Write**: Create chapter content based on the codebase analysis
-5. **Add Interactive Elements**: ${config.includeDiagrams ? "Diagrams, " : ""}${config.includeQuizzes ? "Quizzes, " : ""}Navigation
-6. **Generate Chapters Index**: Create \`${CHAPTERS_FILENAME}\` with chapter-to-files mapping
-7. **Create README**: Generate \`README.md\` with Project Details, Table of Contents, and Update History sections
-8. **Test**: Ensure the tutorial builds and runs correctly
+1. **Explore**: Analyze the source codebase at "${config.sourceDir}" — directory structure, key files, architecture pattern
+2. **Scaffold**: Create the tutorial project in "${config.tutorialDir}" with full navigation and styling
+3. **Write Skeletons**: Create thin chapter content with file references
+4. **Generate Index**: Create \`${CHAPTERS_FILENAME}\` with config and chapter-to-files mapping
+5. **Create README**: Generate \`README.md\` with project details
+6. **Test**: Ensure the tutorial builds and runs
 
-Please start by exploring the source codebase at "${config.sourceDir}" and then create the tutorial in "${config.tutorialDir}".`;
+Start by exploring the source codebase at "${config.sourceDir}" and then create the skeleton tutorial in "${config.tutorialDir}".`;
+}
+
+// ─── Deep-Dive Prompt Builder ─────────────────────────────────────────
+
+function buildDeepDivePrompt(
+	tutorialDir: string,
+	sourceDir: string,
+	chapters: ChapterEntry[],
+	config: TutorialConfig | undefined,
+): string {
+	const audience = config?.audience || "Developers familiar with the language but new to this codebase";
+	const goals = config?.goals || ["Navigate the codebase", "Understand architecture patterns"];
+	const scope = config?.scope || "detailed";
+	const includeQuizzes = config?.includeQuizzes ?? true;
+	const includeDiagrams = config?.includeDiagrams ?? true;
+	const techStack = config?.techStack || "react";
+
+	const chapterCount = chapters.length;
+	const isSingle = chapterCount === 1;
+
+	let prompt = `Perform a DEEP DIVE (Pass 2) to expand ${isSingle ? "a" : chapterCount} skeleton tutorial chapter${isSingle ? "" : "s"} with detailed analysis.
+
+**Tutorial Directory**: ${tutorialDir}
+**Source Codebase**: ${sourceDir}
+**Chapters to expand**: ${chapterCount}
+
+## Overview
+
+A skeleton tutorial was created in Pass 1 with surface-level analysis. Your job is to expand ${isSingle ? "this chapter" : "each chapter"} with rich, detailed content by thoroughly analyzing the source code.
+
+## Target Chapter${isSingle ? "" : "s"}
+
+`;
+
+	for (let i = 0; i < chapters.length; i++) {
+		const ch = chapters[i];
+		prompt += `### ${i + 1}. ${ch.title} (\`${ch.id}\`)\n`;
+		prompt += `**Source files**: ${ch.sourceFiles.map(f => `\`${f}\``).join(", ")}\n`;
+		if (ch.chapterFile) {
+			prompt += `**Chapter component**: \`${ch.chapterFile}\`\n`;
+		}
+		prompt += "\n";
+	}
+
+	prompt += `## Instructions
+
+For ${isSingle ? "this chapter" : "EACH chapter"} listed above, follow this process:
+
+### Step 1: Read Source Files
+Read every source file listed in the chapter's \`sourceFiles\` from "${sourceDir}". As you read, identify:
+- Design patterns and their rationale
+- Key abstractions and interfaces
+- Data flow in and out of the module
+- Error handling strategies
+- Edge cases and corner cases
+- Dependencies on other modules
+
+### Step 2: Generate Analysis Questions
+Based on the surface analysis in the skeleton, formulate 3-5 deeper questions:
+- What patterns are used and WHY were they chosen over alternatives?
+- How does this module interact with others in the broader system?
+- What are the common pitfalls or edge cases a developer should know?
+- What key abstractions exist and what problems do they solve?
+- How would a developer extend or modify this code?
+
+### Step 3: Expand Chapter Content
+Read the current skeleton chapter component${chapters.some(ch => ch.chapterFile) ? " (paths listed above)" : " in the tutorial project"}, then replace the skeleton content with rich, detailed content:
+
+- **Detailed code walkthroughs**: Show key code snippets with line-by-line explanations using prism-react-renderer (vsLight theme)
+- **Pattern explanations**: Explain not just WHAT but WHY — design decisions, trade-offs, alternatives considered
+- **Data flow analysis**: How data moves through the module with concrete examples
+- **Cross-references**: Link to related chapters where relevant
+${includeQuizzes ? "- **Quizzes**: Multiple-choice knowledge-check questions testing deep understanding, with explanations for each answer" : "- **Key takeaways**: Summary of the most important concepts"}
+${includeDiagrams ? "- **Diagrams**: SVG diagrams showing architecture, data flow, or component relationships" : "- **Text-based descriptions**: Clear structured descriptions of architecture and flow"}
+- **Progressive complexity**: Start with simple concepts, build to advanced topics
+- Remove the \"🔍 This chapter will be expanded...\" placeholder note
+
+### Step 4: Update Supporting Files
+- Update \`${CHAPTERS_FILENAME}\` if you discover new source files that should be referenced in any chapter
+- Ensure each chapter component renders all new content correctly
+- Test that the tutorial still builds and runs
+
+## Configuration
+- **Audience**: ${audience}
+- **Learning Goals**: ${goals.join(", ")}
+- **Scope**: ${scope}
+- **Tech Stack**: ${techStack}
+${includeQuizzes ? "- **Include Quizzes**: Yes" : "- **Include Quizzes**: No"}
+${includeDiagrams ? "- **Include Diagrams**: Yes" : "- **Include Diagrams**: No"}
+
+## Quality Guidelines
+- Every code snippet should have context and explanation — never show raw code without commentary
+- Explain the \"why\" behind design decisions, not just the \"what\"
+- Use analogies where helpful for the target audience (${audience})
+- Progressive complexity: start simple, add depth gradually
+- Each chapter should read like a well-written technical blog post
+- Code snippets: prism-react-renderer with vsLight theme
+- Body text: Noto Sans font, Code: Source Code Pro font
+${techStack === "react" ? "- Use prism-react-renderer's <Highlight> component or a shared <CodeBlock> wrapper for code snippets" : ""}
+
+## Process
+1. Read the current skeleton chapter component for the first chapter
+2. Read all source files referenced by that chapter
+3. Analyze deeply and expand the chapter content
+4. Repeat for each remaining chapter
+5. Update \`${CHAPTERS_FILENAME}\` if file references changed
+6. Update the README.md status from \"🏗️ Skeleton\" to \"✅ Complete\" and version to 1.0.0
+7. Verify the tutorial builds and runs correctly
+
+Start by reading the chapter components and source files for the first chapter: **${chapters[0].title}** (\`${chapters[0].id}\`).`;
+
+	return prompt;
 }
 
 // ─── Utility Functions ──────────────────────────────────────────────
@@ -1178,71 +1428,62 @@ function generateTodoItems(config: TutorialConfig): TodoItem[] {
 		{
 			title: "Create tutorial project scaffold",
 			tags: ["tutorial", "setup"],
-			body: `Set up the ${config.techStack} project in ${config.tutorialDir} with Vite, TypeScript, prism-react-renderer (vsLight theme for syntax highlighting), and the required dependencies for navigation.`,
+			body: `Set up the ${config.techStack} project in ${config.tutorialDir} with Vite, TypeScript, prism-react-renderer (vsLight theme), navigation, and progress tracking.`,
 		},
 		{
-			title: "Implement navigation and layout",
-			tags: ["tutorial", "ui"],
-			body: "Create the sidebar navigation, chapter list, and responsive layout with mobile-friendly controls.",
-		},
-		{
-			title: "Create architecture overview chapter",
+			title: "Create skeleton chapters with file references",
 			tags: ["tutorial", "content"],
-			body: "Write the first chapter covering the high-level architecture, main components, and how they interact." + (config.includeDiagrams ? " Include SVG diagrams." : ""),
+			body: "Create thin chapter content: title, 1-2 paragraph overview, and file references. Each chapter should have a deep-dive placeholder. DO NOT write detailed walkthroughs yet.",
+		},
+		{
+			title: "Generate chapters index with config",
+			tags: ["tutorial", "setup"],
+			body: `Create a ${CHAPTERS_FILENAME} file that maps each chapter to its source files AND includes the tutorial config (sourceDir, audience, goals, scope, etc.). This enables /tutorial:deep-dive for expansion and /tutorial:update for drift detection.`,
 		},
 	];
 
 	// Add scope-specific todos
 	if (config.scope === "comprehensive") {
 		items.push({
-			title: "Create module documentation chapters",
+			title: "Create skeleton for all modules",
 			tags: ["tutorial", "content"],
-			body: "Create detailed chapters for each major module, covering all production files.",
+			body: "Create skeleton entries for every major module, ensuring complete file coverage.",
 		});
 	} else {
 		items.push({
-			title: "Create key modules chapter",
+			title: "Create skeleton for key modules",
 			tags: ["tutorial", "content"],
-			body: "Document the key modules and their purposes, focusing on the most important files.",
+			body: "Create skeleton entries for the most important modules and their file references.",
 		});
 	}
 
 	// Add data flow chapter
 	items.push({
-		title: "Create data flow chapter",
+		title: "Create data flow skeleton",
 		tags: ["tutorial", "content"],
-		body: "Document how data moves through the system, including state management and API interactions." + (config.includeDiagrams ? " Include flow diagrams." : ""),
+		body: "Create a skeleton for the data flow chapter with surface-level description and relevant file references.",
 	});
 
-	// Add TypeScript patterns if applicable
+	// Add TypeScript patterns
 	items.push({
-		title: "Create TypeScript patterns chapter",
+		title: "Create TypeScript patterns skeleton",
 		tags: ["tutorial", "content"],
-		body: "Document the TypeScript patterns, interfaces, and types used in the codebase.",
-	});
-
-	// Add chapters index generation todo
-	items.push({
-		title: "Generate chapters index",
-		tags: ["tutorial", "setup"],
-		body: `Create a ${CHAPTERS_FILENAME} file that maps each chapter to its source files. This enables /tutorial:update to detect drift using git.`,
+		body: "Create a skeleton for the TypeScript patterns chapter noting key types and interfaces.",
 	});
 
 	// Add README generation todo
 	items.push({
 		title: "Create project README",
 		tags: ["tutorial", "setup"],
-		body: `Create a README.md file with Project Details (Source Project, Source Location, Based On Commit), Table of Contents placeholder, and Update History table.`,
+		body: `Create a README.md file with Project Details (Source Project, Source Location, Based On Commit, Status: Skeleton), Table of Contents, and Update History (version 0.1.0).`,
 	});
 
-	// Add quizzes if enabled
-	if (config.includeQuizzes) {
-		items.push({
-			title: "Add knowledge-check quizzes",
-			tags: ["tutorial", "interactive"],
-			body: "Add multiple-choice quiz questions to each chapter with explanations for correct answers.",
-		});
-	}
+	// Add deep-dive reminder
+	items.push({
+		title: "Run /tutorial:deep-dive for Pass 2",
+		tags: ["tutorial", "setup"],
+		body: `After the skeleton is complete, run /tutorial:deep-dive ${config.tutorialDir || "<tutorial-dir>"} to expand chapters with detailed analysis, code walkthroughs, quizzes, and diagrams.`,
+	});
 
 	// Add progress tracking
 	items.push({
