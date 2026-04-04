@@ -58,6 +58,10 @@ EOF
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dir)
+            if [ -z "$2" ] || [[ "$2" == --* ]]; then
+                error "--dir requires a path argument"
+                usage
+            fi
             ARG_INSTALL_DIR="$2"
             shift 2
             ;;
@@ -87,19 +91,21 @@ echo ""
 # =============================================================================
 
 get_install_dir() {
-    local dir=""
+    local selected_dir=""
 
     # 1. CLI argument
     if [ -n "$ARG_INSTALL_DIR" ]; then
-        dir="$ARG_INSTALL_DIR"
-        echo "Using directory from CLI argument: $dir"
+        selected_dir="$ARG_INSTALL_DIR"
+        echo "Using directory from CLI argument: $selected_dir"
+        INSTALL_DIR_INPUT="$selected_dir"
         return 0
     fi
 
     # 2. Environment variable
     if [ -n "$PDF_EXTRACTOR_DIR" ]; then
-        dir="$PDF_EXTRACTOR_DIR"
-        echo "Using directory from \$PDF_EXTRACTOR_DIR: $dir"
+        selected_dir="$PDF_EXTRACTOR_DIR"
+        echo "Using directory from \$PDF_EXTRACTOR_DIR: $selected_dir"
+        INSTALL_DIR_INPUT="$selected_dir"
         return 0
     fi
 
@@ -107,16 +113,18 @@ get_install_dir() {
     if [ -f "$CONFIG_FILE" ]; then
         source "$CONFIG_FILE"
         if [ -n "$PDF_EXTRACTOR_DIR" ]; then
-            dir="$PDF_EXTRACTOR_DIR"
-            echo "Using directory from config: $dir"
+            selected_dir="$PDF_EXTRACTOR_DIR"
+            echo "Using directory from config: $selected_dir"
+            INSTALL_DIR_INPUT="$selected_dir"
             return 0
         fi
     fi
 
     # 4. Check default location
     if [ -f "$DEFAULT_INSTALL_DIR/pyproject.toml" ]; then
-        dir="$DEFAULT_INSTALL_DIR"
-        echo "Found existing installation at: $dir"
+        selected_dir="$DEFAULT_INSTALL_DIR"
+        echo "Found existing installation at: $selected_dir"
+        INSTALL_DIR_INPUT="$selected_dir"
         return 0
     fi
 
@@ -125,7 +133,8 @@ get_install_dir() {
     echo "Enter the PDF Extractor project directory, or press Enter to use:"
     echo "  $DEFAULT_INSTALL_DIR"
     read -r -p "> " INPUT_DIR
-    dir="${INPUT_DIR:-$DEFAULT_INSTALL_DIR}"
+    selected_dir="${INPUT_DIR:-$DEFAULT_INSTALL_DIR}"
+    INSTALL_DIR_INPUT="$selected_dir"
 
     return 0
 }
@@ -187,7 +196,37 @@ echo ""
 get_install_dir
 
 # Resolve to absolute path
-INSTALL_DIR="$(cd "$dir" && pwd)"
+INSTALL_DIR="$(cd "$INSTALL_DIR_INPUT" && pwd)"
+
+# If user points to a parent folder, try to resolve a nested project directory.
+if [ ! -f "$INSTALL_DIR/pyproject.toml" ]; then
+    RESOLVED_INSTALL_DIR=""
+    MATCH_COUNT=0
+
+    # Common nested folder name.
+    if [ -f "$INSTALL_DIR/pdf-extractor-analyzer/pyproject.toml" ]; then
+        RESOLVED_INSTALL_DIR="$INSTALL_DIR/pdf-extractor-analyzer"
+    else
+        # Fallback: detect exactly one direct child containing pyproject.toml.
+        shopt -s nullglob
+        for child in "$INSTALL_DIR"/*; do
+            if [ -d "$child" ] && [ -f "$child/pyproject.toml" ]; then
+                MATCH_COUNT=$((MATCH_COUNT + 1))
+                RESOLVED_INSTALL_DIR="$child"
+            fi
+        done
+        shopt -u nullglob
+
+        if [ "$MATCH_COUNT" -ne 1 ]; then
+            RESOLVED_INSTALL_DIR=""
+        fi
+    fi
+
+    if [ -n "$RESOLVED_INSTALL_DIR" ]; then
+        warn "No pyproject.toml in selected directory; using nested project: $RESOLVED_INSTALL_DIR"
+        INSTALL_DIR="$RESOLVED_INSTALL_DIR"
+    fi
+fi
 
 # Verify it's a valid installation
 if [ ! -f "$INSTALL_DIR/pyproject.toml" ]; then
