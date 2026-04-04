@@ -435,17 +435,17 @@ export default function (pi: ExtensionAPI) {
 
 		const lines: string[] = [];
 		for (const item of thread.slice(-6)) {
-				// User message
-				const userText = item.question.trim().split("\n")[0];
-				lines.push(theme.fg("accent", theme.bold("You: ")) + truncateToWidth(userText, width - 5, "…"));
-				lines.push("");
+			// User message
+			const userText = item.question.trim().split("\n")[0];
+			lines.push(theme.fg("accent", theme.bold("You: ")) + truncateToWidth(userText, width - 5, "…"));
+			lines.push("");
 
-				// Assistant message rendered as markdown
-				const answerPrefix = config.display.showAnswerEmoji ? `${config.display.showAnswerEmoji} ` : "";
-				const mdLines = renderMarkdownLines(`${answerPrefix}${item.answer}`, width);
-				lines.push(...mdLines);
-				lines.push("");
-			}
+			// Assistant message rendered as markdown
+			const answerPrefix = config.display.showAnswerEmoji ? `${config.display.showAnswerEmoji} ` : "";
+			const mdLines = renderMarkdownLines(`${answerPrefix}${item.answer}`, width);
+			lines.push(...mdLines);
+			lines.push("");
+		}
 
 		if (pendingQuestion) {
 			const userText = pendingQuestion.trim().split("\n")[0];
@@ -586,7 +586,7 @@ export default function (pi: ExtensionAPI) {
 			thread.push(details);
 		}
 
-		restoreConfig(ctx.sessionManager.getEntries());
+		restoreConfig(branch);
 		syncOverlay();
 	}
 
@@ -605,15 +605,25 @@ export default function (pi: ExtensionAPI) {
 						},
 					};
 					return;
-					}
+				}
 			}
 		}
+
 		// No config found, use defaults
-		config = { ...DEFAULT_CONFIG };
+		config = {
+			thinkingLevel: DEFAULT_CONFIG.thinkingLevel,
+			display: { ...DEFAULT_DISPLAY_CONFIG },
+		};
 	}
 
-	function saveConfig(): void {
-		pi.appendEntry(BTW_CONFIG_TYPE, config);
+	async function saveConfig(ctx: ExtensionCommandContext): Promise<void> {
+		try {
+			pi.appendEntry(BTW_CONFIG_TYPE, config);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			await ctx.ui.notify(`Failed to save BTW config: ${message}`, "error");
+			throw error;
+		}
 	}
 
 	function getEffectiveThinkingLevel(ctx: ExtensionContext | ExtensionCommandContext): SessionThinkingLevel {
@@ -1027,14 +1037,14 @@ export default function (pi: ExtensionAPI) {
 					const tlChoice = await ctx.ui.select("Thinking Level", THINKING_LEVEL_OPTIONS);
 					if (!tlChoice) return;
 					config.thinkingLevel = tlChoice as BtwThinkingLevel;
-					saveConfig();
+					await saveConfig(ctx);
 					await ctx.ui.notify(`Thinking level set to: ${tlChoice}`, "success");
 					break;
 				}
 
 				case "Toggle reasoning display": {
 					config.display.showReasoning = !config.display.showReasoning;
-					saveConfig();
+					await saveConfig(ctx);
 					await ctx.ui.notify(`Reasoning display: ${config.display.showReasoning ? "shown" : "hidden"}`, "success");
 					break;
 				}
@@ -1043,7 +1053,7 @@ export default function (pi: ExtensionAPI) {
 					const emoji = await ctx.ui.input("Reasoning emoji", { default: config.display.showReasoningEmoji });
 					if (emoji === undefined) return;
 					config.display.showReasoningEmoji = emoji || "🧠";
-					saveConfig();
+					await saveConfig(ctx);
 					await ctx.ui.notify(`Reasoning emoji set to: ${config.display.showReasoningEmoji}`, "success");
 					break;
 				}
@@ -1052,14 +1062,14 @@ export default function (pi: ExtensionAPI) {
 					const emoji = await ctx.ui.input("Answer emoji", { default: config.display.showAnswerEmoji });
 					if (emoji === undefined) return;
 					config.display.showAnswerEmoji = emoji || "💫";
-					saveConfig();
+					await saveConfig(ctx);
 					await ctx.ui.notify(`Answer emoji set to: ${config.display.showAnswerEmoji}`, "success");
 					break;
 				}
 
 				case "Toggle tool calls display": {
 					config.display.showToolCalls = !config.display.showToolCalls;
-					saveConfig();
+					await saveConfig(ctx);
 					await ctx.ui.notify(`Tool calls display: ${config.display.showToolCalls ? "shown" : "hidden"}`, "success");
 					break;
 				}
@@ -1068,7 +1078,7 @@ export default function (pi: ExtensionAPI) {
 					const emoji = await ctx.ui.input("Tool call emoji", { default: config.display.showToolCallEmoji });
 					if (emoji === undefined) return;
 					config.display.showToolCallEmoji = emoji || "🔧";
-					saveConfig();
+					await saveConfig(ctx);
 					await ctx.ui.notify(`Tool call emoji set to: ${config.display.showToolCallEmoji}`, "success");
 					break;
 				}
@@ -1077,15 +1087,17 @@ export default function (pi: ExtensionAPI) {
 					const emoji = await ctx.ui.input("Tool result emoji", { default: config.display.showToolResultEmoji });
 					if (emoji === undefined) return;
 					config.display.showToolResultEmoji = emoji || "📋";
-					saveConfig();
+					await saveConfig(ctx);
 					await ctx.ui.notify(`Tool result emoji set to: ${config.display.showToolResultEmoji}`, "success");
 					break;
 				}
 
 				case "Reset to defaults":
-					config = { ...DEFAULT_CONFIG };
-					config.display = { ...DEFAULT_DISPLAY_CONFIG };
-					saveConfig();
+					config = {
+						thinkingLevel: DEFAULT_CONFIG.thinkingLevel,
+						display: { ...DEFAULT_DISPLAY_CONFIG },
+					};
+					await saveConfig(ctx);
 					await ctx.ui.notify("Config reset to defaults", "success");
 					break;
 			}

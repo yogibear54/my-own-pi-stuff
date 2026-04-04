@@ -457,7 +457,9 @@ export default function (pi: ExtensionAPI) {
 				const doExtract = async () => {
 					const auth = await ctx.modelRegistry.getApiKeyAndHeaders(extractionModel);
 					if (!auth.ok) {
-						throw new Error(`No credentials available for ${extractionModel.provider}/${extractionModel.id}.`);
+						throw new Error(
+							`Failed to get credentials for ${extractionModel.provider}/${extractionModel.id}: ${auth.error}`,
+						);
 					}
 					const userMessage: UserMessage = {
 						role: "user",
