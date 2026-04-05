@@ -311,8 +311,8 @@ function registerTutorialCreateCommand(pi: ExtensionAPI) {
 
 			// Quick mode: arguments provided
 			if (argParts.length >= 1) {
-				const tutorialDir = argParts[0];
-				const sourceDir = argParts[1] || ctx.cwd;
+				const tutorialDir = argParts[0].startsWith("@") ? argParts[0].slice(1) : argParts[0];
+				const sourceDir = argParts[1]?.startsWith("@") ? argParts[1].slice(1) : argParts[1] || ctx.cwd;
 
 				await gatherRequirementsAndPrompt(pi, ctx, {
 					tutorialDir,
@@ -380,6 +380,7 @@ function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 				value.startsWith("./") ||
 				value.startsWith("../") ||
 				value.startsWith("~/") ||
+				value.startsWith("@") ||
 				value.includes("/")
 			);
 		};
@@ -394,26 +395,30 @@ function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 				const val = parseInt(part.split("=")[1], 10);
 				if (val > 0) concurrency = val;
 			} else if (part === "--source" && i + 1 < argParts.length) {
-				sourceDirOverride = argParts[i + 1];
+				sourceDirOverride = argParts[i + 1].startsWith("@") ? argParts[i + 1].slice(1) : argParts[i + 1];
 				i++; // skip next arg
 			} else if (part.startsWith("--source=")) {
-				sourceDirOverride = part.split("=").slice(1).join("=");
+				const value = part.split("=").slice(1).join("=");
+				sourceDirOverride = value.startsWith("@") ? value.slice(1) : value;
 			} else if (!part.startsWith("--")) {
 				positionalArgs.push(part);
 			}
 		}
 
 		tutorialDir = positionalArgs[0] || null;
+		if (tutorialDir?.startsWith("@")) {
+			tutorialDir = tutorialDir.slice(1);
+		}
 		if (positionalArgs.length > 1) {
 			const second = positionalArgs[1];
 			const third = positionalArgs[2];
 			if (!sourceDirOverride && looksLikePathArg(second)) {
-				sourceDirOverride = second;
+				sourceDirOverride = second.startsWith("@") ? second.slice(1) : second;
 				chapterId = third || null;
 			} else {
 				chapterId = second;
 				if (!sourceDirOverride && third && looksLikePathArg(third)) {
-					sourceDirOverride = third;
+					sourceDirOverride = third.startsWith("@") ? third.slice(1) : third;
 				}
 			}
 		}
@@ -691,9 +696,7 @@ async function runParallelDeepDive(
 			const dur = s.endTime && s.startTime
 				? " (" + ((s.endTime - s.startTime) / 1000).toFixed(0) + "s)"
 				: "";
-			const id = s.chapter.id.length > 18
-				? s.chapter.id.slice(0, 18) + "…"
-				: s.chapter.id;
+			const id = s.chapter.id;
 			lines.push("  " + icon + " " + id.padEnd(20) + " " + s.chapter.title + dur);
 		}
 		const done = statuses.filter(s => s.status === "done").length;
@@ -896,8 +899,8 @@ function registerTutorialUpdateCommand(pi: ExtensionAPI) {
 				return;
 			}
 
-			const tutorialDir = argParts[0];
-			const providedSourceDir = argParts[1] || null;
+			const tutorialDir = argParts[0].startsWith("@") ? argParts[0].slice(1) : argParts[0];
+			const providedSourceDir = argParts[1]?.startsWith("@") ? argParts[1].slice(1) : argParts[1] || null;
 			const providedBaseCommit = argParts[2] || null;
 
 			// Try to parse README for baseline commit and source directory
