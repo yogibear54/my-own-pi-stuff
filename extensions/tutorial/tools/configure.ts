@@ -6,10 +6,13 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { mkdir, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { buildTutorialPrompt } from "../config/requirements";
 import { CHAPTERS_FILENAME } from "../constants";
+import { resolveDirectoryReference } from "../path-utils";
 import type { TutorialConfig } from "../types";
 
 /**
@@ -38,6 +41,7 @@ export function registerConfigureTutorialTool(pi: ExtensionAPI): void {
 				Type.Literal("vue"),
 				Type.Literal("svelte"),
 				Type.Literal("html"),
+				Type.Literal("markdown"),
 			]),
 		}),
 
@@ -55,15 +59,17 @@ export function registerConfigureTutorialTool(pi: ExtensionAPI): void {
 
 			// Build config
 			const config: TutorialConfig = {
-				tutorialDir: params.tutorialDir,
-				sourceDir: params.sourceDir || ctx.cwd,
-				projectName: params.projectName || inferProjectName(params.tutorialDir),
+				tutorialDir: resolveDirectoryReference(params.tutorialDir, ctx.cwd),
+				sourceDir: params.sourceDir
+					? resolveDirectoryReference(params.sourceDir, ctx.cwd)
+					: ctx.cwd,
+				projectName: params.projectName || inferProjectName(resolveDirectoryReference(params.tutorialDir, ctx.cwd)),
 				audience: params.audience || "Developers familiar with JavaScript but new to TypeScript",
 				goals: params.goals || ["Navigate the codebase", "Understand architecture patterns"],
 				scope: params.scope || "detailed",
 				includeQuizzes: params.includeQuizzes ?? true,
 				includeDiagrams: params.includeDiagrams ?? true,
-				techStack: params.techStack || "react",
+				techStack: params.techStack || "markdown",
 			};
 
 			// Build the prompt for the LLM
@@ -160,7 +166,7 @@ function inferProjectName(dir: string): string {
  * Create todo tracking for tutorial creation
  */
 async function createTutorialTodos(
-	pi: ExtensionAPI,
+	_pi: ExtensionAPI,
 	config: TutorialConfig,
 	ctx: ExtensionContext
 ): Promise<{
@@ -181,7 +187,7 @@ async function createTutorialTodos(
 		const createdTodos: Array<{ id: string; title: string }> = [];
 
 		for (const item of todoItems) {
-			const id = generateTodoId(todosDir);
+			const id = await generateTodoId(todosDir);
 			const todo: TodoFile = {
 				id,
 				title: item.title,
@@ -243,12 +249,16 @@ function generateTodoItems(config: TutorialConfig): TodoItem[] {
 		{
 			title: "Create tutorial project scaffold",
 			tags: ["tutorial", "setup"],
-			body: `Set up the ${config.techStack} project in ${config.tutorialDir} with Vite, TypeScript, prism-react-renderer (vsLight theme), navigation, and progress tracking.`,
+			body: config.techStack === "markdown"
+				? `Set up a markdown-based tutorial in ${config.tutorialDir}. Create an INDEX.md with an auto-generated table of contents that links to all chapter markdown files. Each chapter will be a separate .md file. `
+				: `Set up the ${config.techStack} project in ${config.tutorialDir} with Vite, TypeScript, prism-react-renderer (vsLight theme), navigation, and progress tracking.`,
 		},
 		{
 			title: "Create skeleton chapters with file references",
 			tags: ["tutorial", "content"],
-			body: "Create thin chapter content: title, 1-2 paragraph overview, and file references. Each chapter should have a deep-dive placeholder. DO NOT write detailed walkthroughs yet.",
+			body: config.techStack === "markdown"
+				? "Create thin markdown chapters (Chapter1.md, Chapter2.md, etc.) with title, 1-2 paragraph overview, and file references. Use relative links in each chapter to link back to the INDEX.md."
+				: "Create thin chapter content: title, 1-2 paragraph overview, and file references. Each chapter should have a deep-dive placeholder. DO NOT write detailed walkthroughs yet.",
 		},
 		{
 			title: "Generate chapters index with config",
@@ -322,7 +332,7 @@ function generateTodoItems(config: TutorialConfig): TodoItem[] {
  */
 async function generateTodoId(todosDir: string): Promise<string> {
 	for (let attempt = 0; attempt < 10; attempt += 1) {
-		const id = crypto.randomBytes(4).toString("hex");
+		const id = randomBytes(4).toString("hex");
 		const todoPath = path.join(todosDir, `${id}.md`);
 		if (!existsSync(todoPath)) return id;
 	}

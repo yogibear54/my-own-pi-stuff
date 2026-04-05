@@ -4,8 +4,6 @@
  * Functions for gathering and building tutorial prompts.
  */
 
-import { existsSync } from "node:fs";
-import path from "node:path";
 import { CHAPTERS_FILENAME } from "../constants";
 import type { TutorialConfig } from "../types";
 
@@ -41,12 +39,23 @@ The chapters will be expanded with detailed analysis in Pass 2 via \`/tutorial:d
 - **Include Quizzes**: ${config.includeQuizzes ? "Yes (in Pass 2)" : "No"}
 - **Include Diagrams**: ${config.includeDiagrams ? "Yes (in Pass 2)" : "No"}
 - **Tech Stack**: ${config.techStack}
+${config.techStack === "markdown" ? "- Diagrams will use Mermaid.js for architecture and data flow visualizations" : ""}
 
 ## Requirements
 
 ### 1. Project Structure
 
-Create a ${config.techStack === "react" ? "Vite + React + TypeScript" : config.techStack === "vue" ? "Vite + Vue + TypeScript" : config.techStack === "svelte" ? "Vite + Svelte" : "static HTML"} tutorial app with:
+Create a ${
+		config.techStack === "react"
+			? "Vite + React + TypeScript"
+			: config.techStack === "vue"
+				? "Vite + Vue + TypeScript"
+				: config.techStack === "svelte"
+					? "Vite + Svelte"
+					: config.techStack === "markdown"
+						? "Markdown tutorial files with INDEX.md navigation"
+						: "static HTML"
+	} tutorial app with:
 - Clean navigation (sidebar with chapter list)
 - Progress tracking (use localStorage)
 - Responsive design (mobile-friendly sidebar toggle)
@@ -78,7 +87,7 @@ Each chapter should include:
 - "Continue where you left off" functionality
 - Clean sidebar navigation
 ${config.includeQuizzes ? "- Quiz placeholder sections (to be filled in Pass 2)" : ""}
-${config.includeDiagrams ? "- Diagram placeholder sections (to be filled in Pass 2)" : ""}
+${config.includeDiagrams ? "- Diagram placeholder sections (Mermaid.js for markdown tutorials, SVGs for other stacks) (to be filled in Pass 2)" : ""}
 
 ### 5. Styling
 
@@ -241,8 +250,8 @@ Read the current skeleton chapter component${chapters.some(ch => ch.chapterFile)
 - **Pattern explanations**: Explain not just WHAT but WHY — design decisions, trade-offs, alternatives considered
 - **Data flow analysis**: How data moves through the module with concrete examples
 - **Cross-references**: Link to related chapters where relevant
-${includeQuizzes ? "- **Quizzes**: Multiple-choice knowledge-check questions testing deep understanding, with explanations for each answer" : "- **Key takeaways**: Summary of the most important concepts"}
-${includeDiagrams ? "- **Diagrams**: SVG diagrams showing architecture, data flow, or component relationships" : "- **Text-based descriptions**: Clear structured descriptions of architecture and flow"}
+${includeQuizzes ? "- **Quizzes**: Multiple-choice knowledge-check questions using simple checkbox format (Markdown-friendly). Example:\n  \n  **Question**: What is the purpose of TypeScript interfaces?\n  \n  **Select your answer**:\n  - [ ] A. To add compile-time type checking to JavaScript\n  - [ ] B. To create database connections\n  - [ ] C. To execute database queries\n  \n  **Correct Answer**: A. TypeScript interfaces define the structure of objects and provide compile-time type safety." : "- **Key takeaways**: Summary of the most important concepts"}
+${includeDiagrams ? (techStack === "markdown" ? "- **Diagrams**: Mermaid.js diagrams for architecture, data flow, and component relationships (use markdown code blocks starting with ```mermaid)" : "- **Diagrams**: SVG diagrams showing architecture, data flow, or component relationships") : "- **Text-based descriptions**: Clear structured descriptions of architecture and flow"}
 - **Progressive complexity**: Start with simple concepts, build to advanced topics
 - Remove the "🔍 This chapter will be expanded..." placeholder note
 
@@ -278,7 +287,7 @@ ${techStack === "react" ? "- Use prism-react-renderer's <Highlight> component or
 6. Update the README.md status from "🏗️ Skeleton" to "✅ Complete" and version to 1.0.0
 7. Verify the tutorial builds and runs correctly
 
-Start by reading the chapter components and source files for the first chapter: **${chapters[0].title}** (\`${chapters[0].id}\`).`;
+Start by reading the chapter components and source files for the first chapter${chapters[0] ? `: **${chapters[0].title}** (\`${chapters[0].id}\`)` : "."}.`;
 
 	return prompt;
 }

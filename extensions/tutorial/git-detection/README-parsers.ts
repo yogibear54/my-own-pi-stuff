@@ -7,13 +7,14 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { README_FILENAME } from "../constants";
+import { resolveDirectoryReference } from "../path-utils";
 import type { ReadmeContent } from "../types";
 
 /**
  * Parse README.md and extract key information
  */
 export function parseReadme(tutorialDir: string): ReadmeContent | null {
-	const readmePath = path.resolve(tutorialDir, README_FILENAME);
+	const readmePath = path.resolve(resolveDirectoryReference(tutorialDir), README_FILENAME);
 	if (!existsSync(readmePath)) return null;
 
 	try {
@@ -39,7 +40,7 @@ export function parseReadme(tutorialDir: string): ReadmeContent | null {
  * Update the Based On Commit line in README.md
  */
 export function updateReadmeCommit(tutorialDir: string, newCommit: string): void {
-	const readmePath = path.resolve(tutorialDir, README_FILENAME);
+	const readmePath = path.resolve(resolveDirectoryReference(tutorialDir), README_FILENAME);
 	if (!existsSync(readmePath)) return;
 
 	try {
@@ -63,7 +64,7 @@ export function addReadmeUpdateEntry(
 	version: string,
 	details: string
 ): void {
-	const readmePath = path.resolve(tutorialDir, README_FILENAME);
+	const readmePath = path.resolve(resolveDirectoryReference(tutorialDir), README_FILENAME);
 	if (!existsSync(readmePath)) return;
 
 	try {

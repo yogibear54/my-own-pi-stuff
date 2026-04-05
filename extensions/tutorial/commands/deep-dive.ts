@@ -8,6 +8,7 @@ import { CHAPTERS_FILENAME } from "../constants";
 import { loadChaptersIndex, type ChapterEntry } from "../chapters";
 import { buildDeepDivePrompt } from "../config";
 import { parseReadme } from "../git-detection/README-parsers";
+import { resolveDirectoryReference } from "../path-utils";
 import type { TutorialConfig } from "../types";
 
 /**
@@ -17,7 +18,7 @@ export function registerTutorialDeepDiveCommand(pi: ExtensionAPI): void {
 	const DEEP_DIVE_DESCRIPTION =
 		"Deep-dive into skeleton tutorial chapters with detailed analysis. " +
 		"Expands all chapters or a specific chapter. " +
-		"Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id]";
+		"Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N]";
 
 	const DEEP_DIVE_TOOL_DESCRIPTION =
 		"Expand skeleton tutorial chapters with deep code analysis. " +
@@ -30,12 +31,35 @@ export function registerTutorialDeepDiveCommand(pi: ExtensionAPI): void {
 		const argParts = (args || "").trim().split(/\s+/).filter(Boolean);
 
 		if (argParts.length < 1) {
-			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id]", "error");
+			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N]", "error");
 			return;
 		}
 
-		const tutorialDir = argParts[0];
-		const chapterId = argParts[1] || null;
+		const tutorialDir = resolveDirectoryReference(argParts[0], ctx.cwd);
+		let providedSourceDir: string | null = null;
+		let chapterId: string | null = null;
+		for (let i = 1; i < argParts.length; i += 1) {
+			const token = argParts[i];
+			// Ignore flags (e.g., --concurrency 4) so they don't get mistaken as chapter IDs.
+			if (token.startsWith("--")) {
+				if (token === "--concurrency" && i + 1 < argParts.length) i += 1;
+				continue;
+			}
+			const looksLikePath =
+				token.startsWith("@") ||
+				token.startsWith("./") ||
+				token.startsWith("../") ||
+				token.startsWith("~/") ||
+				token.startsWith("/") ||
+				token.includes("/");
+			if (!providedSourceDir && looksLikePath) {
+				providedSourceDir = resolveDirectoryReference(token, ctx.cwd);
+				continue;
+			}
+			if (!chapterId) {
+				chapterId = token;
+			}
+		}
 
 		// Load chapters index
 		const chaptersIndex = loadChaptersIndex(tutorialDir);
@@ -64,7 +88,9 @@ export function registerTutorialDeepDiveCommand(pi: ExtensionAPI): void {
 		const config = chaptersIndex.config;
 
 		let sourceDir: string;
-		if (config?.sourceDir) {
+		if (providedSourceDir) {
+			sourceDir = providedSourceDir;
+		} else if (config?.sourceDir) {
 			sourceDir = config.sourceDir;
 		} else {
 			const readme = parseReadme(tutorialDir);
@@ -98,7 +124,7 @@ export function registerTutorialDeepDiveCommand(pi: ExtensionAPI): void {
 				pi.sendUserMessage(
 					`Chapter \`${chapterId}\` not found in "${tutorialDir}".\n\n` +
 					`Available chapters:\n${available}\n\n` +
-					`Usage: /tutorial:deep-dive ${tutorialDir} <chapter-id>`,
+					`Usage: /tutorial:deep-dive ${tutorialDir} [source-code-dir] <chapter-id>`,
 					{ deliverAs: "steer" },
 				);
 				return;

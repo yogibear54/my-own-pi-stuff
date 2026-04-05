@@ -20,6 +20,7 @@ import {
 	updateReadmeCommit,
 	addReadmeUpdateEntry,
 } from "../git-detection/README-parsers";
+import { resolveDirectoryReference } from "../path-utils";
 import type { TutorialConfig } from "../types";
 
 /**
@@ -36,8 +37,10 @@ export function registerTutorialUpdateCommand(pi: ExtensionAPI): void {
 				return;
 			}
 
-			const tutorialDir = argParts[0];
-			const providedSourceDir = argParts[1] || null;
+			const tutorialDir = resolveDirectoryReference(argParts[0], ctx.cwd);
+			const providedSourceDir = argParts[1]
+				? resolveDirectoryReference(argParts[1], ctx.cwd)
+				: null;
 			const providedBaseCommit = argParts[2] || null;
 
 			// Try to parse README for baseline commit and source directory

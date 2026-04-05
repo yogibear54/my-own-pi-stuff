@@ -13,7 +13,7 @@ export interface TutorialConfig {
 	scope: "overview" | "detailed" | "comprehensive";
 	includeQuizzes: boolean;
 	includeDiagrams: boolean;
-	techStack: "react" | "vue" | "svelte" | "html";
+	techStack: "react" | "vue" | "svelte" | "html" | "markdown";
 }
 
 export interface ChaptersIndex {

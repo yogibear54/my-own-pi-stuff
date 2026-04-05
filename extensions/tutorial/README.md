@@ -47,15 +47,16 @@ Follow the prompts to specify:
 - Tutorial scope (overview/detailed/comprehensive)
 - Include quizzes
 - Include diagrams
-- Tech stack (react/vue/svelte/html)
+- Tech stack (react/vue/svelte/html/markdown)
 
 **What it creates:**
-1. Tutorial project structure with Vite + your tech stack
+1. Tutorial project structure:
+   - **HTML**: Vite + React + TypeScript + prism-react-renderer
+   - **Markdown**: Markdown files with INDEX.md containing auto-generated table of contents
 2. SKELETON chapters with:
    - Title and 1-2 paragraph overview
-   - "Files Covered" section
-   - Placeholder for deep-dive expansion
-   - Navigation between chapters
+   - "Files Covered" section (for HTML)
+   - For Markdown: links to related files
 3. `chapters.json` file mapping chapters to source files
 4. `README.md` with project details and update history
 5. `TODO.md` to track creation progress
@@ -105,7 +106,7 @@ Performs deep code analysis to expand skeleton tutorials with rich, detailed con
 - ✅ Data flow analysis with concrete examples
 - ✅ Cross-references to related chapters
 - ✅ Multiple-choice quizzes with explanations
-- ✅ SVG diagrams showing architecture/flow
+- ✅ Diagrams: SVG for React/Vue/Svelte, Mermaid for Markdown
 - ✅ Key takeaways summary
 - ✅ Progressive complexity (simple → advanced)
 
@@ -193,7 +194,7 @@ configure_tutorial({
   scope: "comprehensive",
   includeQuizzes: true,
   includeDiagrams: true,
-  techStack: "react"
+  techStack: "markdown"
 })
 ```
 
@@ -309,7 +310,7 @@ my-tutorial/
 
 ## 🎨 Tech Stack Options
 
-The extension supports these tutorial UI stacks:
+The extension supports these tutorial formats:
 
 | Stack | Description | Template |
 |-------|-------------|----------|
@@ -317,10 +318,8 @@ The extension supports these tutorial UI stacks:
 | **vue** | Vite + Vue + TypeScript | Great for Vue developers |
 | **svelte** | Vite + Svelte | Modern, lightweight |
 | **html** | Static HTML + Prism.js | Simple, no build tool |
+| **markdown** | Vite + Markdown + Auto-generated TOC | Text-based, TOC connects all chapters |
 
----
-
-## 📋 Tutorial Creation Workflow
 
 ### Pass 1: Skeleton Creation
 
@@ -337,6 +336,42 @@ The extension supports these tutorial UI stacks:
    ↓
 6. Run /tutorial:deep-dive my-tutorial
 ```
+
+### Markdown Tutorials
+
+When using the **markdown** tech stack:
+
+- An `INDEX.md` file is created with an auto-generated table of contents
+- Each chapter is a separate `.md` file (e.g., `Chapter1.md`, `Chapter2.md`)
+- The TOC in `INDEX.md` links to all chapter files
+- Chapters use relative links to navigate between them
+- No build step required - open directly in a browser
+- **Mermaid.js diagrams** for architecture, data flow, and component relationships
+- Mermaid supports flowcharts, sequence diagrams, class diagrams, Gantt charts, and more
+- All diagrams are embedded as code blocks and rendered automatically by supported markdown viewers
+- **Multiple-choice quizzes** using simple checkbox format:
+  ```markdown
+  **Question**: What is the purpose of TypeScript interfaces?
+  
+  **Select your answer**:
+  - [ ] A. To add compile-time type checking to JavaScript
+  - [ ] B. To create database connections
+  - [ ] C. To execute database queries
+  
+  **Correct Answer**: A. TypeScript interfaces define the structure of objects and provide compile-time type safety.
+  ```
+- **Multiple-answer questions** (for select all that apply):
+  ```markdown
+  **Question**: Which of the following are valid TypeScript types? (Select all that apply)
+  
+  - [ ] number
+  - [ ] string
+  - [ ] database
+  - [ ] function
+  
+  **Correct Answers**: number, string, function
+  ```
+- Lightweight and easy to edit directly in markdown files
 
 ### Pass 2: Deep-Dive Expansion
 

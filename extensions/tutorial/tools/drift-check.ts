@@ -19,6 +19,7 @@ import {
 	type ChaptersIndex,
 } from "../chapters";
 import { parseReadme } from "../git-detection/README-parsers";
+import { resolveDirectoryReference } from "../path-utils";
 
 /**
  * Register the check_tutorial_drift tool
@@ -45,13 +46,15 @@ export function registerCheckTutorialDriftTool(pi: ExtensionAPI): void {
 		}),
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const tutorialDir = params.tutorialDir;
+			const tutorialDir = resolveDirectoryReference(params.tutorialDir, ctx.cwd);
 
 			// Try to parse README for baseline commit and source directory
 			const readme = parseReadme(tutorialDir);
 
 			// Determine source directory (from args or README)
-			const sourceDir = params.sourceDir || readme?.sourceDir;
+			const sourceDir = params.sourceDir
+				? resolveDirectoryReference(params.sourceDir, ctx.cwd)
+				: readme?.sourceDir;
 			if (!sourceDir) {
 				return {
 					content: [{

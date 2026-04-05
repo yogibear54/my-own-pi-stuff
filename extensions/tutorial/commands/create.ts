@@ -4,11 +4,9 @@
  * Command for creating a skeleton tutorial.
  */
 
-import { existsSync } from "node:fs";
-import path from "node:path";
-import { CHAPTERS_FILENAME } from "../constants";
-import { loadChaptersIndex, saveChaptersIndex, type ChapterEntry } from "../chapters";
-import { buildTutorialPrompt, inferProjectName } from "../config";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { buildTutorialPrompt, inferProjectName } from "../config/requirements";
+import { resolveDirectoryReference } from "../path-utils";
 import type { TutorialConfig } from "../types";
 
 /**
@@ -16,49 +14,67 @@ import type { TutorialConfig } from "../types";
  */
 export function registerTutorialCreateCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("tutorial:create", {
-		description: "Create a skeleton tutorial (Pass 1). Use /tutorial:deep-dive for Pass 2 expansion. Usage: /tutorial:create <tutorial-dir> [source-code-dir]",
+		description:
+			"Create a skeleton tutorial (Pass 1). Use /tutorial:deep-dive for Pass 2 expansion. Usage: /tutorial:create <tutorial-dir> [source-code-dir]",
 		handler: async (args, ctx) => {
 			const argParts = (args || "").trim().split(/\s+/).filter(Boolean);
 
 			// Quick mode: arguments provided
 			if (argParts.length >= 1) {
-				const tutorialDir = argParts[0];
-				const sourceDir = argParts[1] || ctx.cwd;
+				const tutorialDir = resolveDirectoryReference(argParts[0], ctx.cwd);
+				const sourceDir = argParts[1]
+					? resolveDirectoryReference(argParts[1], ctx.cwd)
+					: ctx.cwd;
 
-				await gatherRequirementsAndPrompt(pi, ctx, {
-					tutorialDir,
-					sourceDir,
-					projectName: inferProjectName(tutorialDir),
-					audience: "Developers familiar with JavaScript but new to TypeScript",
-					goals: ["Navigate the codebase", "Understand architecture patterns", "Make small changes", "Debug common issues"],
-					scope: "detailed",
-					includeQuizzes: true,
-					includeDiagrams: true,
-					techStack: "react",
-				}, true);
+				await gatherRequirementsAndPrompt(
+					pi,
+					ctx,
+					{
+						tutorialDir,
+						sourceDir,
+						projectName: inferProjectName(tutorialDir),
+						audience: "Developers familiar with JavaScript but new to TypeScript",
+						goals: [
+							"Navigate the codebase",
+							"Understand architecture patterns",
+							"Make small changes",
+							"Debug common issues",
+						],
+						scope: "detailed",
+						includeQuizzes: true,
+						includeDiagrams: true,
+						techStack: "react",
+					},
+					true
+				);
 				return;
 			}
 
 			// Interactive mode: need to gather requirements
 			if (!ctx.hasUI) {
-				ctx.ui.notify("Error: Interactive mode requires UI. Use /tutorial:create <tutorial-dir> [source-code-dir]", "error");
+				ctx.ui.notify(
+					"Error: Interactive mode requires UI. Use /tutorial:create <tutorial-dir> [source-code-dir]",
+					"error"
+				);
 				return;
 			}
 
 			// Prompt the LLM to gather requirements
-			pi.sendUserMessage(`I need to gather requirements for the tutorial. Please ask the user:
+			pi.sendUserMessage(
+				`I need to gather requirements for the tutorial. Please ask the user:
 
 1. Where should the tutorial files be created? (required - provide a directory path)
 2. Which codebase should be documented? (optional - defaults to current directory)
-3. Who is the target audience? (e.g., 'JavaScript developers new to TypeScript')
-4. What are the learning goals? (e.g., 'Navigate the codebase', 'Understand architecture')
-5. What scope should the tutorial cover? ('overview', 'detailed', or 'comprehensive')
+3. Who is the target audience? (e.g., "JavaScript developers new to TypeScript")
+4. What are the learning goals? (e.g., "Navigate the codebase", "Understand architecture")
+5. What scope should the tutorial cover? ("overview", "detailed", or "comprehensive")
 6. Should it include quizzes? (yes/no)
 7. Should it include diagrams? (yes/no)
-8. Which tech stack for the tutorial UI? ('react', 'vue', 'svelte', 'markdown' or 'html')
-9. Which tech stack for the tutorial backend? ('node', 'python', 'ruby', 'php', 'go', 'rust', 'java', 'c#', 'kotlin', 'swift', 'dart', 'elixir', 'erlang', 'haskell', 'ocaml', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'clojure', 'groovy', 'scala', 'cloj
+8. Which tech stack for the tutorial output? ("react", "vue", "svelte", "html", or "markdown")
 
-Or use quick mode: /tutorial:create <tutorial-dir> [source-code-dir]`, { deliverAs: "steer" });
+Or use quick mode: /tutorial:create <tutorial-dir> [source-code-dir]`,
+				{ deliverAs: "steer" }
+			);
 		},
 	});
 }
@@ -67,7 +83,7 @@ Or use quick mode: /tutorial:create <tutorial-dir> [source-code-dir]`, { deliver
  * Gather requirements and send the prompt to LLM
  */
 async function gatherRequirementsAndPrompt(
-	_pi: ExtensionAPI,
+	pi: ExtensionAPI,
 	_ctx: ExtensionContext,
 	config: TutorialConfig,
 	quickMode: boolean
@@ -82,8 +98,8 @@ async function gatherRequirementsAndPrompt(
 **Source Codebase**: ${config.sourceDir}
 **Project Name**: ${config.projectName}
 `;
-		_pi.sendUserMessage(`${header}\n---\n\n${prompt}`);
+		pi.sendUserMessage(`${header}\n---\n\n${prompt}`);
 	} else {
-		_pi.sendUserMessage(prompt);
+		pi.sendUserMessage(prompt);
 	}
 }

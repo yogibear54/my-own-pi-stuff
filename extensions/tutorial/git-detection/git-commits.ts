@@ -6,20 +6,13 @@
 
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import path from "node:path";
+import { resolveDirectoryReference } from "../path-utils";
 
 /**
  * Expand tilde (~) in file paths
  */
 export function expandTildePath(filePath: string): string {
-	if (filePath.startsWith("~/")) {
-		return filePath.replace(
-			"~",
-			process.env.HOME ||
-				require("os").homedir()
-		);
-	}
-	return filePath;
+	return resolveDirectoryReference(filePath);
 }
 
 /**
