@@ -24,9 +24,10 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import * as os from "node:os";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -88,6 +89,10 @@ interface TodoItem {
 const CHAPTERS_FILENAME = "chapters.json";
 const TODOS_DIR_NAME = ".pi/todos";
 const README_FILENAME = "README.md";
+const DEFAULT_CONCURRENCY = 4;
+
+// Module-level state for active tmux deep-dive sessions (for cleanup on shutdown)
+let activeDeepDiveSession: { sessionName: string; tmpDir: string } | null = null;
 
 // ─── Extension Entry Point ──────────────────────────────────────────
 
@@ -97,6 +102,20 @@ export default function createTutorialExtension(pi: ExtensionAPI) {
 	registerTutorialUpdateCommand(pi);
 	registerConfigureTutorialTool(pi);
 	registerCheckTutorialDriftTool(pi);
+
+	// Clean up tmux deep-dive sessions on shutdown
+	pi.on("session_shutdown", async () => {
+		if (activeDeepDiveSession) {
+			try {
+				execSync(`tmux kill-session -t ${activeDeepDiveSession.sessionName} 2>/dev/null`, {
+					stdio: ["pipe", "pipe", "pipe"],
+				});
+			} catch {
+				// Session may already be gone
+			}
+			activeDeepDiveSession = null;
+		}
+	});
 }
 
 // ─── Git Utilities ──────────────────────────────────────────────────
@@ -338,41 +357,58 @@ function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 	const DEEP_DIVE_DESCRIPTION =
 		"Deep-dive into skeleton tutorial chapters with detailed analysis. " +
 		"Expands all chapters or a specific chapter. " +
-		"Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id]";
+		"Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id] [--concurrency N]";
 
-	const DEEP_DIVE_TOOL_DESCRIPTION =
-		"Expand skeleton tutorial chapters with deep code analysis. " +
-		"Reads the skeleton created by /tutorial:create, deeply analyzes source files, " +
-	 "and expands chapter content with detailed walkthroughs, quizzes, and diagrams. " +
-		"Call when the user wants to deepen tutorial content.";
-
-	// Register the command
 	const handler = async (args: string, ctx: ExtensionContext) => {
 		const argParts = (args || "").trim().split(/\s+/).filter(Boolean);
 
 		if (argParts.length < 1) {
-			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id]", "error");
+			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id] [--concurrency N]", "error");
 			return;
 		}
 
-		const tutorialDir = argParts[0];
-		const chapterId = argParts[1] || null;
+		// Parse arguments: tutorialDir, chapterId, --concurrency N
+		let tutorialDir: string | null = null;
+		let chapterId: string | null = null;
+		let concurrency = DEFAULT_CONCURRENCY;
+
+		for (let i = 0; i < argParts.length; i++) {
+			const part = argParts[i];
+			if (part === "--concurrency" && i + 1 < argParts.length) {
+				const val = parseInt(argParts[i + 1], 10);
+				if (val > 0) concurrency = val;
+				i++; // skip next arg
+			} else if (part.startsWith("--concurrency=")) {
+				const val = parseInt(part.split("=")[1], 10);
+				if (val > 0) concurrency = val;
+			} else if (!tutorialDir) {
+				tutorialDir = part;
+			} else if (!chapterId && !part.startsWith("--")) {
+				chapterId = part;
+			}
+		}
+
+		if (!tutorialDir) {
+			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id] [--concurrency N]", "error");
+			return;
+		}
 
 		// Load chapters index
 		const chaptersIndex = loadChaptersIndex(tutorialDir);
 		if (!chaptersIndex || chaptersIndex.chapters.length === 0) {
 			const readme = parseReadme(tutorialDir);
-			const hasReadme = !!readme;
-			const sourceInfo = readme?.sourceDir ? `\nFound README.md with source at \`${readme.sourceDir}\`.` : "\nNo README.md found either.";
+			const sourceInfo = readme?.sourceDir
+				? "\nFound README.md with source at `" + readme.sourceDir + "`."
+				: "\nNo README.md found either.";
 
 			ctx.ui.notify(
-				`No ${CHAPTERS_FILENAME} found in "${tutorialDir}".`,
+				"No " + CHAPTERS_FILENAME + " found in \"" + tutorialDir + "\".",
 				"error",
 			);
 			pi.sendUserMessage(
-				`No ${CHAPTERS_FILENAME} found in "${tutorialDir}".\n\n` +
-				`Deep-dive requires a skeleton tutorial created with \`/tutorial:create\`.\n\n` +
-				`Please run \`/tutorial:create ${tutorialDir}\` first to create the skeleton tutorial.` +
+				"No " + CHAPTERS_FILENAME + " found in \"" + tutorialDir + "\".\n\n" +
+				"Deep-dive requires a skeleton tutorial created with `/tutorial:create`.\n\n" +
+				"Please run `/tutorial:create " + tutorialDir + "` first to create the skeleton tutorial." +
 				sourceInfo,
 				{ deliverAs: "steer" },
 			);
@@ -391,11 +427,11 @@ function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 				sourceDir = readme.sourceDir;
 			} else {
 				pi.sendUserMessage(
-					`Cannot determine source codebase location for tutorial at "${tutorialDir}".\n\n` +
-					`The ${CHAPTERS_FILENAME} doesn't have a config section with sourceDir, and no README.md was found.\n\n` +
-					`Please either:\n` +
-					`- Re-create the tutorial with \`/tutorial:create\` (which saves config to chapters.json)\n` +
-					`- Or add a \"config\" section to ${CHAPTERS_FILENAME} with the \"sourceDir\" field`,
+					"Cannot determine source codebase location for tutorial at \"" + tutorialDir + "\".\n\n" +
+					"The " + CHAPTERS_FILENAME + " doesn't have a config section with sourceDir, and no README.md was found.\n\n" +
+					"Please either:\n" +
+					"- Re-create the tutorial with `/tutorial:create` (which saves config to chapters.json)\n" +
+					"- Or add a \"config\" section to " + CHAPTERS_FILENAME + " with the \"sourceDir\" field",
 					{ deliverAs: "steer" },
 				);
 				return;
@@ -411,13 +447,13 @@ function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 			);
 			if (!target) {
 				const available = chaptersIndex.chapters
-					.map(ch => `  - \`${ch.id}\` → ${ch.title}`)
+					.map(ch => "  - `" + ch.id + "` → " + ch.title)
 					.join("\n");
-				ctx.ui.notify(`Chapter "${chapterId}" not found.`, "error");
+				ctx.ui.notify("Chapter \"" + chapterId + "\" not found.", "error");
 				pi.sendUserMessage(
-					`Chapter \`${chapterId}\` not found in "${tutorialDir}".\n\n` +
-					`Available chapters:\n${available}\n\n` +
-					`Usage: /tutorial:deep-dive ${tutorialDir} <chapter-id>`,
+					"Chapter `" + chapterId + "` not found in \"" + tutorialDir + "\".\n\n" +
+					"Available chapters:\n" + available + "\n\n" +
+					"Usage: /tutorial:deep-dive " + tutorialDir + " <chapter-id>",
 					{ deliverAs: "steer" },
 				);
 				return;
@@ -427,23 +463,392 @@ function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 			targetChapters = chaptersIndex.chapters;
 		}
 
-		// Notify the user
 		const chapterCount = targetChapters.length;
 		const isSingle = chapterCount === 1;
+
+		// Single chapter or no tmux → inline mode (existing behavior)
+		if (isSingle || !checkTmuxAvailable()) {
+			ctx.ui.notify(
+				"🔍 Deep diving " + (isSingle ? "chapter: " + targetChapters[0].title : chapterCount + " chapters (inline)") + "...",
+				"info",
+			);
+			const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, targetChapters, config);
+			pi.sendUserMessage(prompt);
+			return;
+		}
+
+		// Multi-chapter with tmux → parallel mode
 		ctx.ui.notify(
-			`🔍 Deep diving ${isSingle ? `chapter: ${targetChapters[0].title}` : `${chapterCount} chapters`}...`,
+			"🔍 Deep diving " + chapterCount + " chapters via tmux (concurrency: " + concurrency + ")...",
 			"info",
 		);
 
-		// Build and send the deep-dive prompt
-		const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, targetChapters, config);
-		pi.sendUserMessage(prompt);
+		// Fire-and-forget: runs in background, updates widget, sends final message
+		runParallelDeepDive(pi, ctx, tutorialDir, sourceDir, targetChapters, config, concurrency).catch(err => {
+			ctx.ui.notify("Deep dive error: " + err.message, "error");
+			ctx.ui.setWidget("tutorial-deep-dive", []);
+		});
 	};
 
 	pi.registerCommand("tutorial:deep-dive", {
 		description: DEEP_DIVE_DESCRIPTION,
 		handler,
 	});
+}
+
+// ─── Tmux Parallel Deep-Dive Helpers ─────────────────────────────────
+
+interface DeepDiveChapterStatus {
+	chapter: ChapterEntry;
+	status: "queued" | "running" | "done" | "failed";
+	exitCode?: number;
+	startTime?: number;
+	endTime?: number;
+}
+
+function checkTmuxAvailable(): boolean {
+	try {
+		execSync("which tmux", { stdio: ["pipe", "pipe", "pipe"] });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function sanitizeTmuxName(name: string): string {
+	return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 50);
+}
+
+function buildPerChapterSystemPrompt(
+	tutorialDir: string,
+	sourceDir: string,
+	config: TutorialConfig | undefined,
+): string {
+	const audience = config?.audience || "Developers familiar with the language but new to this codebase";
+	const goals = config?.goals || ["Navigate the codebase", "Understand architecture patterns"];
+	const scope = config?.scope || "detailed";
+	const includeQuizzes = config?.includeQuizzes ?? true;
+	const includeDiagrams = config?.includeDiagrams ?? true;
+	const techStack = config?.techStack || "react";
+
+	const lines: string[] = [
+		"You are a tutorial deep-dive worker. Your job is to expand a SINGLE skeleton tutorial chapter with detailed, rich content.",
+		"",
+		"## Context",
+		"",
+		"You are working on a tutorial project at \"" + tutorialDir + "\".",
+		"The source codebase being documented is at \"" + sourceDir + "\".",
+		"",
+		"## Deep-Dive Instructions",
+		"",
+		"### Step 1: Read Source Files",
+		"Read every source file listed in the chapter's sourceFiles. As you read, identify:",
+		"- Design patterns and their rationale",
+		"- Key abstractions and interfaces",
+		"- Data flow in and out of the module",
+		"- Error handling strategies",
+		"- Edge cases and corner cases",
+		"- Dependencies on other modules",
+		"",
+		"### Step 2: Generate Analysis Questions",
+		"Formulate 3-5 deeper questions:",
+		"- What patterns are used and WHY were they chosen over alternatives?",
+		"- How does this module interact with others?",
+		"- What are common pitfalls or edge cases?",
+		"- What key abstractions exist and what problems do they solve?",
+		"- How would a developer extend or modify this code?",
+		"",
+		"### Step 3: Expand Chapter Content",
+		"Read the current skeleton chapter component in the tutorial project, then replace the skeleton content with rich, detailed content:",
+		"",
+		"- **Detailed code walkthroughs**: Show key code snippets with line-by-line explanations using prism-react-renderer (vsLight theme)",
+		"- **Pattern explanations**: Explain not just WHAT but WHY — design decisions, trade-offs, alternatives considered",
+		"- **Data flow analysis**: How data moves through the module with concrete examples",
+		"- **Cross-references**: Link to related chapters where relevant",
+		includeQuizzes
+			? "- **Quizzes**: Multiple-choice knowledge-check questions testing deep understanding, with explanations for each answer"
+			: "- **Key takeaways**: Summary of the most important concepts",
+		includeDiagrams
+			? "- **Diagrams**: SVG diagrams showing architecture, data flow, or component relationships"
+			: "- **Text-based descriptions**: Clear structured descriptions of architecture and flow",
+		"- **Progressive complexity**: Start with simple concepts, build to advanced topics",
+		"- Remove the \"🔍 This chapter will be expanded...\" placeholder note",
+		"",
+		"### Step 4: Update Supporting Files",
+		"- Update " + CHAPTERS_FILENAME + " if you discover new source files that should be referenced",
+		"- Ensure the chapter component renders all new content correctly",
+		"",
+		"## Configuration",
+		"- **Audience**: " + audience,
+		"- **Learning Goals**: " + goals.join(", "),
+		"- **Scope**: " + scope,
+		"- **Tech Stack**: " + techStack,
+		includeQuizzes ? "- **Include Quizzes**: Yes" : "- **Include Quizzes**: No",
+		includeDiagrams ? "- **Include Diagrams**: Yes" : "- **Include Diagrams**: No",
+		"",
+		"## Quality Guidelines",
+		"- Every code snippet should have context and explanation — never show raw code without commentary",
+		"- Explain the \"why\" behind design decisions, not just the \"what\"",
+		"- Use analogies where helpful for the target audience (" + audience + ")",
+		"- Progressive complexity: start simple, add depth gradually",
+		"- Each chapter should read like a well-written technical blog post",
+		"- Code snippets: prism-react-renderer with vsLight theme",
+		"- Body text: Noto Sans font, Code: Source Code Pro font",
+		techStack === "react"
+			? "- Use prism-react-renderer's <Highlight> component or a shared <CodeBlock> wrapper for code snippets"
+			: "",
+	];
+
+	return lines.join("\n");
+}
+
+function buildPerChapterTask(
+	tutorialDir: string,
+	sourceDir: string,
+	chapter: ChapterEntry,
+): string {
+	const lines: string[] = [
+		"Perform a DEEP DIVE to expand the skeleton tutorial chapter \"" + chapter.title + "\" (id: " + chapter.id + ").",
+		"",
+		"**Tutorial Directory**: " + tutorialDir,
+		"**Source Codebase**: " + sourceDir,
+		"",
+		"**Source files to analyze**: " + chapter.sourceFiles.map(f => "\"" + f + "\"").join(", "),
+	];
+
+	if (chapter.chapterFile) {
+		lines.push("**Chapter component to update**: " + chapter.chapterFile);
+	}
+
+	lines.push(
+		"",
+		"Start by reading the chapter component" + (chapter.chapterFile ? " at \"" + chapter.chapterFile + "\"" : " in the tutorial project") + ", then read all source files, and expand the chapter with detailed analysis.",
+	);
+
+	return lines.join("\n");
+}
+
+async function runParallelDeepDive(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	tutorialDir: string,
+	sourceDir: string,
+	chapters: ChapterEntry[],
+	config: TutorialConfig | undefined,
+	concurrency: number,
+): Promise<void> {
+	const projectSlug = sanitizeTmuxName(path.basename(tutorialDir));
+	const sessionName = "tdd-" + projectSlug;
+	const tmpDir = await mkdtemp(path.join(os.tmpdir(), "tdd-"));
+
+	// Track active session for cleanup on shutdown
+	activeDeepDiveSession = { sessionName, tmpDir };
+
+	const statuses: DeepDiveChapterStatus[] = chapters.map(ch => ({
+		chapter: ch,
+		status: "queued",
+	}));
+
+	const updateWidget = () => {
+		const lines: string[] = ["─── Deep Dive Progress ──────────────────"];
+		for (const s of statuses) {
+			const icon =
+				s.status === "done" ? "✓" :
+				s.status === "failed" ? "✗" :
+				s.status === "running" ? "⏳" : "·";
+			const dur = s.endTime && s.startTime
+				? " (" + ((s.endTime - s.startTime) / 1000).toFixed(0) + "s)"
+				: "";
+			const id = s.chapter.id.length > 18
+				? s.chapter.id.slice(0, 18) + "…"
+				: s.chapter.id;
+			lines.push("  " + icon + " " + id.padEnd(20) + " " + s.chapter.title + dur);
+		}
+		const done = statuses.filter(s => s.status === "done").length;
+		const failed = statuses.filter(s => s.status === "failed").length;
+		const running = statuses.filter(s => s.status === "running").length;
+		const queued = statuses.filter(s => s.status === "queued").length;
+		lines.push("─────────────────────────────────────────");
+		lines.push("  " + done + "/" + chapters.length + " done  " + running + " running  " + queued + " queued  " + failed + " failed");
+		lines.push("  tmux attach -t " + sessionName);
+		ctx.ui.setWidget("tutorial-deep-dive", lines);
+	};
+
+	// Create tmux session (kill any existing one with the same name)
+	try {
+		execSync(
+			"tmux kill-session -t " + sessionName + " 2>/dev/null; " +
+			"tmux new-session -d -s " + sessionName + " -x 200 -y 50",
+			{ stdio: ["pipe", "pipe", "pipe"] },
+		);
+	} catch {
+		ctx.ui.notify("Failed to create tmux session. Falling back to inline mode.", "warning");
+		const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, chapters, config);
+		pi.sendUserMessage(prompt);
+		return;
+	}
+
+	// Rename the initial window to "status"
+	try {
+		execSync("tmux rename-window -t " + sessionName + ":0 \"status\"", {
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+	} catch {
+		// Non-critical
+	}
+
+	updateWidget();
+	ctx.ui.notify(
+		"Deep dive started in tmux session \"" + sessionName + "\" (" + chapters.length + " chapters, " + concurrency + " concurrent)",
+		"info",
+	);
+
+	// Write per-chapter system prompt files and wrapper scripts
+	const systemPromptBase = buildPerChapterSystemPrompt(tutorialDir, sourceDir, config);
+
+	for (let i = 0; i < chapters.length; i++) {
+		const chapter = chapters[i];
+		const task = buildPerChapterTask(tutorialDir, sourceDir, chapter);
+
+		// Combine system prompt base + chapter-specific task into one prompt file
+		const promptContent = systemPromptBase + "\n\n---\n\n" + task;
+		const promptPath = path.join(tmpDir, "prompt-" + chapter.id + ".md");
+		await writeFile(promptPath, promptContent, "utf-8");
+
+		// Wrapper script: cd to cwd, run pi, write exit code to status file
+		const statusFile = path.join(tmpDir, "status-" + chapter.id);
+		const escapedCwd = ctx.cwd.replace(/'/g, "'\\''");
+		const escapedPromptPath = promptPath.replace(/'/g, "'\\''");
+		const escapedStatusFile = statusFile.replace(/'/g, "'\\''");
+		const escapedScriptPath = path.join(tmpDir, "run-" + chapter.id + ".sh").replace(/'/g, "'\\''");
+
+		const scriptContent = [
+			"#!/bin/bash",
+			"cd '" + escapedCwd + "'",
+			"echo \"=== Deep Dive: " + chapter.title + " (" + chapter.id + ") ===\"",
+			"echo \"Source files: " + chapter.sourceFiles.join(", ") + "\"",
+			"echo \"\"",
+			"pi -p --no-session --append-system-prompt '" + escapedPromptPath + "' \"Perform the deep dive as described in your system prompt.\"",
+			"EXIT_CODE=$?",
+			"echo \"\"",
+			"if [ $EXIT_CODE -eq 0 ]; then",
+			"    echo \"✓ Chapter complete: " + chapter.title + "\"",
+			"else",
+			"    echo \"✗ Chapter failed (exit code: $EXIT_CODE): " + chapter.title + "\"",
+			"fi",
+			"echo \"$EXIT_CODE\" > '" + escapedStatusFile + "'",
+		].join("\n");
+
+		const scriptPath = path.join(tmpDir, "run-" + chapter.id + ".sh");
+		await writeFile(scriptPath, scriptContent, "utf-8");
+		execSync("chmod +x '" + escapedScriptPath + "'");
+	}
+
+	// Poll for chapter completion via status files
+	const waitForCompletion = (chapterIndex: number): Promise<void> => {
+		return new Promise((resolve) => {
+			const chapter = chapters[chapterIndex];
+			const statusFile = path.join(tmpDir, "status-" + chapter.id);
+			const check = () => {
+				if (existsSync(statusFile)) {
+					try {
+						const exitCode = parseInt(readFileSync(statusFile, "utf-8").trim(), 10);
+						statuses[chapterIndex].status = exitCode === 0 ? "done" : "failed";
+						statuses[chapterIndex].exitCode = exitCode;
+					} catch {
+						statuses[chapterIndex].status = "failed";
+					}
+					statuses[chapterIndex].endTime = Date.now();
+					updateWidget();
+					resolve();
+				} else {
+					setTimeout(check, 2000);
+				}
+			};
+			check();
+		});
+	};
+
+	// Worker pool: up to `concurrency` workers, each picks the next queued chapter
+	let nextIndex = 0;
+	const poolSize = Math.min(concurrency, chapters.length);
+	const workers = Array.from({ length: poolSize }, async () => {
+		while (nextIndex < chapters.length) {
+			const currentIndex = nextIndex++;
+			const chapter = chapters[currentIndex];
+			const windowName = sanitizeTmuxName(
+				"ch" + String(currentIndex + 1).padStart(2, "0") + "-" + chapter.id,
+			);
+			const scriptPath = path.join(tmpDir, "run-" + chapter.id + ".sh");
+			const escapedScriptPath = scriptPath.replace(/'/g, "'\\''");
+
+			// Mark as running
+			statuses[currentIndex].status = "running";
+			statuses[currentIndex].startTime = Date.now();
+			updateWidget();
+
+			// Create tmux window and run the wrapper script
+			try {
+				execSync(
+					"tmux new-window -t " + sessionName + " -n \"" + windowName + "\" \"bash '" + escapedScriptPath + "'\"",
+					{ stdio: ["pipe", "pipe", "pipe"] },
+				);
+			} catch {
+				statuses[currentIndex].status = "failed";
+				statuses[currentIndex].endTime = Date.now();
+				updateWidget();
+				continue; // Continue with next chapter
+			}
+
+			// Wait for this chapter to complete
+			await waitForCompletion(currentIndex);
+		}
+	});
+
+	// Wait for all workers to finish
+	await Promise.all(workers);
+
+	// Build final summary
+	const done = statuses.filter(s => s.status === "done").length;
+	const failed = statuses.filter(s => s.status === "failed").length;
+	const failedChapters = statuses
+		.filter(s => s.status === "failed")
+		.map(s => s.chapter.id);
+	const totalDuration = statuses.reduce(
+		(sum, s) => sum + ((s.endTime && s.startTime) ? (s.endTime - s.startTime) : 0),
+		0,
+	);
+
+	updateWidget();
+
+	let summary: string;
+	if (failed === 0) {
+		summary =
+			"Deep dive complete: **" + done + "/" + chapters.length + "** chapters expanded.\n\n" +
+			"Total time: " + (totalDuration / 1000).toFixed(0) + "s across all chapters.\n" +
+			"tmux session `" + sessionName + "` is still available for review.\n\n" +
+			"All chapters expanded successfully. Next steps:\n" +
+			"- Verify the tutorial builds and runs correctly\n" +
+			"- Update the README.md status from \"🏗️ Skeleton\" to \"✅ Complete\"\n" +
+			"- Run `/tutorial:update` later to keep chapters in sync with source changes";
+	} else {
+		const retryLines = failedChapters
+			.map(id => "  `/tutorial:deep-dive " + tutorialDir + " " + id + "`")
+			.join("\n");
+		summary =
+			"Deep dive complete: **" + done + "/" + chapters.length + "** chapters expanded, **" + failed + "** failed.\n\n" +
+			"Total time: " + (totalDuration / 1000).toFixed(0) + "s across all chapters.\n" +
+			"tmux session `" + sessionName + "` is still available for review.\n\n" +
+			"Failed chapters can be re-run individually:\n" + retryLines;
+	}
+
+	pi.sendUserMessage(summary);
+
+	// Clear widget after a delay
+	setTimeout(() => {
+		ctx.ui.setWidget("tutorial-deep-dive", []);
+		activeDeepDiveSession = null;
+	}, 30000);
 }
 
 // ─── /tutorial:update ───────────────────────────────────────────────
