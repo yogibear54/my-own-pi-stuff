@@ -613,7 +613,7 @@ function registerConfigureTutorialTool(pi: ExtensionAPI) {
 			// Build config
 			const config: TutorialConfig = {
 				tutorialDir: params.tutorialDir,
-				sourceDir: params.sourceCodeDir || ctx.cwd,
+				sourceDir: params.sourceDir || ctx.cwd,
 				projectName: params.projectName || inferProjectName(params.tutorialDir),
 				audience: params.audience || "Developers familiar with JavaScript but new to TypeScript",
 				goals: params.goals || ["Navigate the codebase", "Understand architecture patterns"],
@@ -720,7 +720,7 @@ function registerCheckTutorialDriftTool(pi: ExtensionAPI) {
 			const readme = parseReadme(tutorialDir);
 
 			// Determine source directory (from args or README)
-			const sourceDir = params.sourceCodeDir || readme?.sourceDir;
+			const sourceDir = params.sourceDir || readme?.sourceDir;
 			if (!sourceDir) {
 				return {
 					content: [{
