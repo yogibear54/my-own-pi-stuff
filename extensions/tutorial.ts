@@ -216,31 +216,41 @@ function addReadmeUpdateEntry(tutorialDir: string, version: string, details: str
 		const today = new Date().toISOString().split("T")[0];
 		const newEntry = `| ${today} | ${version} | ${details} |`;
 
-		// Find the Update History table and add the new entry
+		// Find the Update History table and add the new entry after the last data row
 		const lines = content.split("\n");
 		let inUpdateHistory = false;
-		let tableEndIndex = -1;
+		let foundSeparator = false;
+		let lastDataRowIndex = -1;
 
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			if (line.includes("## Update History")) {
 				inUpdateHistory = true;
+				foundSeparator = false;
 				continue;
 			}
-			if (inUpdateHistory) {
-				// Check if we've reached the end of the table
+			if (!inUpdateHistory) continue;
+
+			// Skip the separator line (e.g. |---|---|)
+			if (!foundSeparator && line.includes("---")) {
+				foundSeparator = true;
+				continue;
+			}
+
+			if (foundSeparator) {
+				// A table data row contains | but isn't the separator
 				if (line.includes("|") && !line.includes("---")) {
-					continue;
-				}
-				if (line.trim() === "" || line.startsWith("#") || line.startsWith("*")) {
-					tableEndIndex = i;
+					lastDataRowIndex = i;
+				} else {
+					// First non-table line after data rows = end of table
 					break;
 				}
 			}
 		}
 
-		if (tableEndIndex > 0) {
-			lines.splice(tableEndIndex, 0, newEntry);
+		const insertIndex = lastDataRowIndex >= 0 ? lastDataRowIndex + 1 : -1;
+		if (insertIndex > 0) {
+			lines.splice(insertIndex, 0, newEntry);
 			writeFileSync(readmePath, lines.join("\n"), "utf-8");
 		}
 	} catch {
