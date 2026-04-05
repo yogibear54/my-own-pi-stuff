@@ -357,20 +357,32 @@ function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 	const DEEP_DIVE_DESCRIPTION =
 		"Deep-dive into skeleton tutorial chapters with detailed analysis. " +
 		"Expands all chapters or a specific chapter. " +
-		"Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id] [--concurrency N]";
+		"Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N]";
 
 	const handler = async (args: string, ctx: ExtensionContext) => {
 		const argParts = (args || "").trim().split(/\s+/).filter(Boolean);
 
 		if (argParts.length < 1) {
-			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id] [--concurrency N]", "error");
+			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N]", "error");
 			return;
 		}
 
-		// Parse arguments: tutorialDir, chapterId, --concurrency N
+		// Parse arguments: tutorialDir, optional sourceDir, optional chapterId, --concurrency N
 		let tutorialDir: string | null = null;
+		let sourceDirOverride: string | null = null;
 		let chapterId: string | null = null;
 		let concurrency = DEFAULT_CONCURRENCY;
+		const positionalArgs: string[] = [];
+
+		const looksLikePathArg = (value: string): boolean => {
+			return (
+				value.startsWith("/") ||
+				value.startsWith("./") ||
+				value.startsWith("../") ||
+				value.startsWith("~/") ||
+				value.includes("/")
+			);
+		};
 
 		for (let i = 0; i < argParts.length; i++) {
 			const part = argParts[i];
@@ -381,15 +393,33 @@ function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 			} else if (part.startsWith("--concurrency=")) {
 				const val = parseInt(part.split("=")[1], 10);
 				if (val > 0) concurrency = val;
-			} else if (!tutorialDir) {
-				tutorialDir = part;
-			} else if (!chapterId && !part.startsWith("--")) {
-				chapterId = part;
+			} else if (part === "--source" && i + 1 < argParts.length) {
+				sourceDirOverride = argParts[i + 1];
+				i++; // skip next arg
+			} else if (part.startsWith("--source=")) {
+				sourceDirOverride = part.split("=").slice(1).join("=");
+			} else if (!part.startsWith("--")) {
+				positionalArgs.push(part);
+			}
+		}
+
+		tutorialDir = positionalArgs[0] || null;
+		if (positionalArgs.length > 1) {
+			const second = positionalArgs[1];
+			const third = positionalArgs[2];
+			if (!sourceDirOverride && looksLikePathArg(second)) {
+				sourceDirOverride = second;
+				chapterId = third || null;
+			} else {
+				chapterId = second;
+				if (!sourceDirOverride && third && looksLikePathArg(third)) {
+					sourceDirOverride = third;
+				}
 			}
 		}
 
 		if (!tutorialDir) {
-			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [chapter-id] [--concurrency N]", "error");
+			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N]", "error");
 			return;
 		}
 
@@ -419,7 +449,9 @@ function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 		const config = chaptersIndex.config;
 
 		let sourceDir: string;
-		if (config?.sourceDir) {
+		if (sourceDirOverride) {
+			sourceDir = sourceDirOverride;
+		} else if (config?.sourceDir) {
 			sourceDir = config.sourceDir;
 		} else {
 			const readme = parseReadme(tutorialDir);
@@ -728,7 +760,7 @@ async function runParallelDeepDive(
 			"echo \"=== Deep Dive: " + chapter.title + " (" + chapter.id + ") ===\"",
 			"echo \"Source files: " + chapter.sourceFiles.join(", ") + "\"",
 			"echo \"\"",
-			"pi -p --no-session --append-system-prompt '" + escapedPromptPath + "' \"Perform the deep dive as described in your system prompt.\"",
+			"pi -p --stream=on --no-session --append-system-prompt '" + escapedPromptPath + "' \"Perform the deep dive as described in your system prompt.\"",
 			"EXIT_CODE=$?",
 			"echo \"\"",
 			"if [ $EXIT_CODE -eq 0 ]; then",
