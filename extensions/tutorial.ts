@@ -21,9 +21,9 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 
@@ -277,16 +277,6 @@ function saveChaptersIndex(tutorialDir: string, index: ChaptersIndex): void {
 	writeFileSync(chaptersPath, JSON.stringify(index, null, 2), "utf-8");
 }
 
-// Polyfill for writeFileSync (since we imported writeFile earlier)
-function writeFileSync(filePath: string, content: string, encoding: BufferEncoding): void {
-	const fs = require("node:fs");
-	fs.writeFileSync(filePath, content, encoding);
-}
-
-function readFileSync(filePath: string, encoding: BufferEncoding): string {
-	const fs = require("node:fs");
-	return fs.readFileSync(filePath, encoding);
-}
 
 // ─── /tutorial:create ───────────────────────────────────────────────
 
