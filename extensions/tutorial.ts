@@ -877,7 +877,7 @@ function registerCheckTutorialDriftTool(pi: ExtensionAPI) {
 // ─── Prompt Builder ─────────────────────────────────────────────────
 
 async function gatherRequirementsAndPrompt(
-	pi: ExtensionAPI,
+	_pi: ExtensionAPI,
 	_ctx: ExtensionContext,
 	config: TutorialConfig,
 	quickMode: boolean
@@ -885,43 +885,16 @@ async function gatherRequirementsAndPrompt(
 	const prompt = buildTutorialPrompt(config);
 
 	if (quickMode) {
-		// In quick mode, provide a shorter prompt
-		pi.sendUserMessage(`Create an interactive tutorial for the codebase.
+		// In quick mode, prepend a concise summary header then delegate to the shared prompt
+		const header = `Create an interactive tutorial for the codebase.
 
 **Target Directory**: ${config.tutorialDir}
 **Source Codebase**: ${config.sourceDir}
 **Project Name**: ${config.projectName}
-
-Please follow these steps:
-
-1. Explore the source codebase structure at "${config.sourceDir}"
-2. Identify the architecture pattern (clean architecture, MVC, modular, etc.)
-3. Create the tutorial project in "${config.tutorialDir}" with:
-   - ${config.techStack === "react" ? "Vite + React + TypeScript" : config.techStack}
-   - Clean navigation with sidebar
-   - Progress tracking
-   - Syntax highlighting (prism-react-renderer with vsLight theme)
-4. Write chapters covering:
-   - Architecture overview
-   - Key modules and their purposes
-   - Data flow
-   - TypeScript patterns
-   - Entry points and configuration
-   - Body text should use Noto Sans font, code blocks should use Source Code Pro font
-   - Use prism-react-renderer with the vsLight theme for syntax highlighting in code blocks
-${config.includeQuizzes ? "5. Add knowledge-check quizzes to each chapter" : ""}
-${config.includeDiagrams ? "6. Include SVG diagrams for architecture and code flow" : ""}
-7. Create a \`${CHAPTERS_FILENAME}\` file in the tutorial root:
-   - For each chapter, record the chapter id, title, and list of source files it references
-   - Use relative paths from "${config.sourceDir}"
-   - This enables drift detection via \`/tutorial:update\` later
-8. Create a \`README.md\` file with:
-   - Project Details section (Source Project, Source Location, Based On Commit)
-   - Table of Contents placeholder
-   - Update History table (initial entry: version 1.0.0, "Initial tutorial creation")
-9. Test that the tutorial builds and runs correctly`);
+`;
+		_pi.sendUserMessage(`${header}\n---\n\n${prompt}`);
 	} else {
-		pi.sendUserMessage(prompt);
+		_pi.sendUserMessage(prompt);
 	}
 }
 
