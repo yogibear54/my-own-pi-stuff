@@ -526,20 +526,23 @@ function detectDriftViaGit(chaptersIndex: ChaptersIndex, gitChanges: GitChange[]
 
 	for (const chapter of chaptersIndex.chapters) {
 		const changedFiles: ChangedFile[] = [];
+		const seenPaths = new Set<string>();
 
 		for (const filePattern of chapter.sourceFiles) {
 			// Check if this file matches any changed file
-			if (changedFilesSet.has(filePattern)) {
+			if (changedFilesSet.has(filePattern) && !seenPaths.has(filePattern)) {
 				const change = gitChanges.find(c => c.path === filePattern)!;
 				changedFiles.push(change);
+				seenPaths.add(filePattern);
 			}
 
 			// Handle glob patterns (e.g., "src/services/*.ts")
 			if (filePattern.includes("*")) {
 				const regex = globToRegex(filePattern);
 				for (const change of gitChanges) {
-					if (regex.test(change.path) && !changedFiles.some(c => c.path === change.path)) {
+					if (regex.test(change.path) && !seenPaths.has(change.path)) {
 						changedFiles.push(change);
+						seenPaths.add(change.path);
 					}
 				}
 			}
