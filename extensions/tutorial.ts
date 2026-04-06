@@ -556,72 +556,179 @@ function sanitizeTmuxName(name: string): string {
 	return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 50);
 }
 
-function buildPerChapterSystemPrompt(
+
+// ─── Analysis Prompt Builder ──────────────────────────────────────────
+
+/**
+ * Build the analysis prompt for Phase 1 of the parallel deep-dive.
+ * This prompt instructs Pi to thoroughly analyze the source codebase
+ * so the analysis context can be shared with forked chapter workers.
+ */
+function buildAnalysisPrompt(
 	tutorialDir: string,
 	sourceDir: string,
+	chapters: ChapterEntry[],
+	config: TutorialConfig | undefined,
+): string {
+	// Deduplicate source files across all chapters
+	const allSourceFiles = [...new Set(
+		chapters.flatMap(ch => ch.sourceFiles),
+	)];
+
+	const audience = config?.audience || "Developers familiar with the language but new to this codebase";
+	const goals = config?.goals || ["Navigate the codebase", "Understand architecture patterns"];
+	const scope = config?.scope || "detailed";
+
+	const lines: string[] = [
+		"Perform a COMPREHENSIVE ANALYSIS of the codebase for a tutorial deep-dive.",
+		"",
+		"## Objective",
+		"",
+		"Analyze the source codebase thoroughly so that tutorial chapters can be expanded with accurate, detailed content.",
+		"Your analysis will be shared as context with workers that expand individual chapters.",
+		"Read every file listed below and build a thorough understanding of the codebase.",
+		"",
+		"## Tutorial Configuration",
+		"",
+		"- **Tutorial Directory**: " + tutorialDir,
+		"- **Source Codebase**: " + sourceDir,
+		"- **Audience**: " + audience,
+		"- **Learning Goals**: " + goals.join(", "),
+		"- **Scope**: " + scope,
+		"",
+		"## Source Files to Analyze",
+		"",
+		"Read ALL of the following source files (unique across all chapters):",
+		"",
+	];
+
+	for (const file of allSourceFiles) {
+		lines.push("- `" + file + "`");
+	}
+
+	// Group files by chapter for reference
+	lines.push("");
+	lines.push("## Chapter-to-File Mapping");
+	lines.push("");
+	for (const ch of chapters) {
+		lines.push("**" + ch.title + "** (`" + ch.id + "`): " + ch.sourceFiles.map(f => "`" + f + "`").join(", "));
+	}
+
+	lines.push("");
+	lines.push("## Analysis Instructions");
+	lines.push("");
+	lines.push("### Step 1: Explore Directory Structure");
+	lines.push("Use `bash` to explore the directory structure of the source codebase at \"" + sourceDir + "\":");
+	lines.push("- List top-level directories and their purposes");
+	lines.push("- Identify the architecture pattern (clean architecture, MVC, modular, etc.)");
+	lines.push("- Note entry points and configuration files");
+	lines.push("");
+	lines.push("### Step 2: Read All Source Files");
+	lines.push("Read EVERY source file listed above from \"" + sourceDir + "\". For each file, note:");
+	lines.push("- Its purpose and role in the architecture");
+	lines.push("- Key patterns, abstractions, and interfaces");
+	lines.push("- Dependencies and interactions with other modules");
+	lines.push("- Data flow in and out");
+	lines.push("- Error handling strategies");
+	lines.push("- Edge cases and notable implementation details");
+	lines.push("");
+	lines.push("### Step 3: Read Tutorial Skeleton");
+	lines.push("Read the current skeleton tutorial in \"" + tutorialDir + "\":");
+	lines.push("- Explore the tutorial project structure");
+	for (const ch of chapters) {
+		if (ch.chapterFile) {
+			lines.push("- Read chapter component: `" + ch.chapterFile + "`");
+		}
+	}
+	lines.push("- Understand the tutorial's tech stack, navigation, and component structure");
+	lines.push("");
+	lines.push("### Step 4: Provide Structured Analysis");
+	lines.push("After reading all files, provide a comprehensive analysis covering:");
+	lines.push("");
+	lines.push("1. **Architecture Overview**: High-level architecture pattern, module organization, key abstractions");
+	lines.push("2. **Module Relationships**: How modules interact, dependency graph, shared utilities");
+	lines.push("3. **Key Patterns**: Design patterns used and their rationale (WHY chosen over alternatives)");
+	lines.push("4. **Data Data Flow**: How data moves through the system, key data structures");
+	lines.push("5. **Per-File Analysis**: Brief notes on each source file's role, key functions/classes, and notable patterns");
+	lines.push("6. **Cross-Chapter Connections**: Which chapters reference shared code or concepts");
+	lines.push("");
+	lines.push("This analysis is critical — it will be used as shared context by workers expanding each chapter independently.");
+
+	return lines.join("\n");
+}
+
+// ─── Worker Task Prompt Builder ───────────────────────────────────────
+
+/**
+ * Build the task prompt for a forked chapter worker.
+ * Workers inherit the full analysis session context via --fork, so this prompt
+ * only needs the chapter-specific instructions and writing guidelines.
+ */
+function buildWorkerTaskPrompt(
+	tutorialDir: string,
+	sourceDir: string,
+	chapter: ChapterEntry,
 	config: TutorialConfig | undefined,
 ): string {
 	const audience = config?.audience || "Developers familiar with the language but new to this codebase";
-	const goals = config?.goals || ["Navigate the codebase", "Understand architecture patterns"];
 	const scope = config?.scope || "detailed";
 	const includeQuizzes = config?.includeQuizzes ?? true;
 	const includeDiagrams = config?.includeDiagrams ?? true;
 	const techStack = config?.techStack || "react";
 
 	const lines: string[] = [
-		"You are a tutorial deep-dive worker. Your job is to expand a SINGLE skeleton tutorial chapter with detailed, rich content.",
+		"Using the codebase analysis from the conversation above, expand the skeleton tutorial chapter with detailed content.",
 		"",
-		"## Context",
+		"## Your Task",
 		"",
-		"You are working on a tutorial project at \"" + tutorialDir + "\".",
-		"The source codebase being documented is at \"" + sourceDir + "\".",
+		"Expand the skeleton chapter **\"" + chapter.title + "\"** (id: `" + chapter.id + "`).",
 		"",
-		"## Deep-Dive Instructions",
+		"**Tutorial Directory**: " + tutorialDir,
+		"**Source Codebase**: " + sourceDir,
+		"**Source files for this chapter**: " + chapter.sourceFiles.map(f => "`" + f + "`").join(", "),
+	];
+
+	if (chapter.chapterFile) {
+		lines.push("**Chapter component to update**: `" + chapter.chapterFile + "`");
+	}
+
+	lines.push(
 		"",
-		"### Step 1: Read Source Files",
-		"Read every source file listed in the chapter's sourceFiles. As you read, identify:",
-		"- Design patterns and their rationale",
-		"- Key abstractions and interfaces",
-		"- Data flow in and out of the module",
-		"- Error handling strategies",
-		"- Edge cases and corner cases",
-		"- Dependencies on other modules",
+		"## Instructions",
 		"",
-		"### Step 2: Generate Analysis Questions",
-		"Formulate 3-5 deeper questions:",
-		"- What patterns are used and WHY were they chosen over alternatives?",
-		"- How does this module interact with others?",
-		"- What are common pitfalls or edge cases?",
-		"- What key abstractions exist and what problems do they solve?",
-		"- How would a developer extend or modify this code?",
+		"1. Read the current skeleton chapter component" + (chapter.chapterFile ? " at `" + chapter.chapterFile + "`" : " in the tutorial project"),
+		"2. Using your understanding of the codebase from the analysis above, expand the chapter with rich, detailed content",
+		"3. Write the expanded content to the chapter component file",
+		"4. Ensure the component renders all new content correctly",
 		"",
-		"### Step 3: Expand Chapter Content",
-		"Read the current skeleton chapter component in the tutorial project, then replace the skeleton content with rich, detailed content:",
+		"## Content Requirements",
 		"",
 		"- **Detailed code walkthroughs**: Show key code snippets with line-by-line explanations using prism-react-renderer (vsLight theme)",
 		"- **Pattern explanations**: Explain not just WHAT but WHY — design decisions, trade-offs, alternatives considered",
 		"- **Data flow analysis**: How data moves through the module with concrete examples",
 		"- **Cross-references**: Link to related chapters where relevant",
-		includeQuizzes
-			? "- **Quizzes**: Multiple-choice knowledge-check questions testing deep understanding, with explanations for each answer"
-			: "- **Key takeaways**: Summary of the most important concepts",
-		includeDiagrams
-			? "- **Diagrams**: SVG diagrams showing architecture, data flow, or component relationships"
-			: "- **Text-based descriptions**: Clear structured descriptions of architecture and flow",
+	);
+
+	if (includeQuizzes) {
+		lines.push("- **Quizzes**: Multiple-choice knowledge-check questions testing deep understanding, with explanations for each answer");
+	} else {
+		lines.push("- **Key takeaways**: Summary of the most important concepts");
+	}
+
+	if (includeDiagrams) {
+		lines.push("- **Diagrams**: SVG diagrams showing architecture, data flow, or component relationships");
+	} else {
+		lines.push("- **Text-based descriptions**: Clear structured descriptions of architecture and flow");
+	}
+
+	lines.push(
 		"- **Progressive complexity**: Start with simple concepts, build to advanced topics",
 		"- Remove the \"🔍 This chapter will be expanded...\" placeholder note",
 		"",
-		"### Step 4: Update Supporting Files",
-		"- Update " + CHAPTERS_FILENAME + " if you discover new source files that should be referenced",
-		"- Ensure the chapter component renders all new content correctly",
-		"",
 		"## Configuration",
 		"- **Audience**: " + audience,
-		"- **Learning Goals**: " + goals.join(", "),
 		"- **Scope**: " + scope,
 		"- **Tech Stack**: " + techStack,
-		includeQuizzes ? "- **Include Quizzes**: Yes" : "- **Include Quizzes**: No",
-		includeDiagrams ? "- **Include Diagrams**: Yes" : "- **Include Diagrams**: No",
 		"",
 		"## Quality Guidelines",
 		"- Every code snippet should have context and explanation — never show raw code without commentary",
@@ -631,40 +738,30 @@ function buildPerChapterSystemPrompt(
 		"- Each chapter should read like a well-written technical blog post",
 		"- Code snippets: prism-react-renderer with vsLight theme",
 		"- Body text: Noto Sans font, Code: Source Code Pro font",
-		techStack === "react"
-			? "- Use prism-react-renderer's <Highlight> component or a shared <CodeBlock> wrapper for code snippets"
-			: "",
-	];
-
-	return lines.join("\n");
-}
-
-function buildPerChapterTask(
-	tutorialDir: string,
-	sourceDir: string,
-	chapter: ChapterEntry,
-): string {
-	const lines: string[] = [
-		"Perform a DEEP DIVE to expand the skeleton tutorial chapter \"" + chapter.title + "\" (id: " + chapter.id + ").",
-		"",
-		"**Tutorial Directory**: " + tutorialDir,
-		"**Source Codebase**: " + sourceDir,
-		"",
-		"**Source files to analyze**: " + chapter.sourceFiles.map(f => "\"" + f + "\"").join(", "),
-	];
-
-	if (chapter.chapterFile) {
-		lines.push("**Chapter component to update**: " + chapter.chapterFile);
-	}
-
-	lines.push(
-		"",
-		"Start by reading the chapter component" + (chapter.chapterFile ? " at \"" + chapter.chapterFile + "\"" : " in the tutorial project") + ", then read all source files, and expand the chapter with detailed analysis.",
 	);
 
+	if (techStack === "react") {
+		lines.push("- Use prism-react-renderer's <Highlight> component or a shared <CodeBlock> wrapper for code snippets");
+	}
+
 	return lines.join("\n");
 }
 
+// ─── Parallel Deep-Dive (Analysis → Fork Workers) ────────────────────
+
+/**
+ * Run the parallel deep-dive using a two-phase approach:
+ *
+ * Phase 1 — Analysis: Run a Pi instance that reads all source files and
+ * builds a comprehensive understanding of the codebase. The session is
+ * saved to a known location.
+ *
+ * Phase 2 — Fork Workers: For each chapter, fork the analysis session
+ * using `pi --fork $SESSION --no-session` so each worker:
+ *   - Inherits the full analysis context (source files already read, insights already generated)
+ *   - Is completely isolated from other workers (--no-session = ephemeral, no shared state)
+ *   - Gets a chapter-specific task prompt
+ */
 async function runParallelDeepDive(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
@@ -677,9 +774,15 @@ async function runParallelDeepDive(
 	const projectSlug = sanitizeTmuxName(path.basename(tutorialDir));
 	const sessionName = "tdd-" + projectSlug;
 	const tmpDir = await mkdtemp(path.join(os.tmpdir(), "tdd-"));
+	const sessionDir = path.join(tmpDir, "sessions");
 
 	// Track active session for cleanup on shutdown
 	activeDeepDiveSession = { sessionName, tmpDir };
+
+	// Analysis phase tracking
+	let analysisStatus: "running" | "done" | "failed" = "running";
+	const analysisStartTime = Date.now();
+	let analysisEndTime: number | undefined;
 
 	const statuses: DeepDiveChapterStatus[] = chapters.map(ch => ({
 		chapter: ch,
@@ -687,9 +790,20 @@ async function runParallelDeepDive(
 	}));
 
 	const updateWidget = () => {
-		// Use render function form for proper dynamic updates
 		ctx.ui.setWidget("tutorial-deep-dive", (_tui, theme) => {
 			const lines: string[] = [theme.fg("accent", "─── Deep Dive Progress ─────────────────────────────────────────────────────────")];
+
+			// Analysis phase line
+			const analysisIcon =
+				analysisStatus === "done" ? theme.fg("success", "✓") :
+				analysisStatus === "failed" ? theme.fg("error", "✗") :
+				theme.fg("accent", "⏳");
+			const analysisDur = analysisEndTime
+				? theme.fg("muted", " (" + ((analysisEndTime - analysisStartTime) / 1000).toFixed(0) + "s)")
+				: "";
+			lines.push("  " + analysisIcon + " " + theme.fg("dim", "analysis") + " Codebase analysis" + analysisDur);
+
+			// Chapter status lines
 			for (const s of statuses) {
 				const icon =
 					s.status === "done" ? theme.fg("success", "✓") :
@@ -706,15 +820,16 @@ async function runParallelDeepDive(
 			const failed = statuses.filter(s => s.status === "failed").length;
 			const running = statuses.filter(s => s.status === "running").length;
 			const queued = statuses.filter(s => s.status === "queued").length;
+			const phaseLabel = analysisStatus === "running" ? "Phase 1: Analyzing" : "Phase 2: Expanding";
 			lines.push(theme.fg("border", "────────────────────────────────────────────────────────────────────────────────────────────"));
-			lines.push(theme.fg("muted", "  " + done + "/" + chapters.length + " done  " + running + " running  " + queued + " queued  " + failed + " failed"));
+			lines.push(theme.fg("muted", "  " + phaseLabel + "  " + done + "/" + chapters.length + " done  " + running + " running  " + queued + " queued  " + failed + " failed"));
 			lines.push(theme.fg("dim", "  tmux attach -t " + sessionName));
 			return {
 				render(_width: number): string[] {
 					return lines;
 				},
 				invalidate(): void {
-					// Nothing to invalidate - lines are rebuilt on each updateWidget call
+					// Nothing to invalidate — lines are rebuilt on each updateWidget call
 				},
 			};
 		});
@@ -734,9 +849,9 @@ async function runParallelDeepDive(
 		return;
 	}
 
-	// Rename the initial window to "status"
+	// Rename the initial window to "analysis"
 	try {
-		execSync("tmux rename-window -t " + sessionName + ":0 \"status\"", {
+		execSync("tmux rename-window -t " + sessionName + ":0 \"analysis\"", {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 	} catch {
@@ -745,49 +860,137 @@ async function runParallelDeepDive(
 
 	updateWidget();
 	ctx.ui.notify(
-		"Deep dive started in tmux session \"" + sessionName + "\" (" + chapters.length + " chapters, " + concurrency + " concurrent)",
+		"Phase 1: Analyzing codebase in tmux session \"" + sessionName + "\"...",
 		"info",
 	);
 
-	// Write per-chapter system prompt files and wrapper scripts
-	const systemPromptBase = buildPerChapterSystemPrompt(tutorialDir, sourceDir, config);
+	// ─── Phase 1: Codebase Analysis ──────────────────────
 
-	for (let i = 0; i < chapters.length; i++) {
-		const chapter = chapters[i];
-		const task = buildPerChapterTask(tutorialDir, sourceDir, chapter);
+	const analysisPrompt = buildAnalysisPrompt(tutorialDir, sourceDir, chapters, config);
+	const analysisPromptPath = path.join(tmpDir, "analysis-prompt.md");
+	await writeFile(analysisPromptPath, analysisPrompt, "utf-8");
 
-		// Combine system prompt base + chapter-specific task into one prompt file
-		const promptContent = systemPromptBase + "\n\n---\n\n" + task;
-		const promptPath = path.join(tmpDir, "prompt-" + chapter.id + ".md");
-		await writeFile(promptPath, promptContent, "utf-8");
+	const analysisStatusFile = path.join(tmpDir, "analysis-status");
+	const analysisSessionPathFile = path.join(tmpDir, "analysis-session-path");
+	const escapedCwd = ctx.cwd.replace(/'/g, "'\\''");
+	const escapedSessionDir = sessionDir.replace(/'/g, "'\\''");
+	const escapedPromptPath = analysisPromptPath.replace(/'/g, "'\\''");
+	const escapedStatusFile = analysisStatusFile.replace(/'/g, "'\\''");
+	const escapedSessionPathFile = analysisSessionPathFile.replace(/'/g, "'\\''");
 
-		// Wrapper script: cd to cwd, run pi, write exit code to status file
-		const statusFile = path.join(tmpDir, "status-" + chapter.id);
-		const escapedCwd = ctx.cwd.replace(/'/g, "'\\''");
-		const escapedPromptPath = promptPath.replace(/'/g, "'\\''");
-		const escapedStatusFile = statusFile.replace(/'/g, "'\\''");
-		const escapedScriptPath = path.join(tmpDir, "run-" + chapter.id + ".sh").replace(/'/g, "'\\''");
+	// Analysis script: run pi with --session-dir, then find and save the session path.
+	// The session file is needed so we can --fork from it for each chapter worker.
+	const analysisScript = [
+		"#!/bin/bash",
+		"cd '" + escapedCwd + "'",
+		"echo '=== Phase 1: Codebase Analysis ==='",
+		"echo 'Analyzing source files across " + chapters.length + " chapters...'",
+		"echo ''",
+		"pi --session-dir '" + escapedSessionDir + "' -p @'" + escapedPromptPath + "'",
+		"EXIT_CODE=$?",
+		"SESSION_FILE=$(find '" + escapedSessionDir + "' -name '*.jsonl' -type f 2>/dev/null | sort -r | head -1)",
+		"echo \"$SESSION_FILE\" > '" + escapedSessionPathFile + "'",
+		"echo ''",
+		"if [ $EXIT_CODE -eq 0 ]; then",
+		"    echo '✓ Analysis complete'",
+		"else",
+		"    echo '✗ Analysis failed (exit code: $EXIT_CODE)'",
+		"fi",
+		"echo \"$EXIT_CODE\" > '" + escapedStatusFile + "'",
+	].join("\n");
 
-		const scriptContent = [
-			"#!/bin/bash",
-			"cd '" + escapedCwd + "'",
-			"echo \"=== Deep Dive: " + chapter.title + " (" + chapter.id + ") ===\"",
-			"echo \"Source files: " + chapter.sourceFiles.join(", ") + "\"",
-			"echo \"\"",
-			"pi -p --stream=on --no-session --append-system-prompt '" + escapedPromptPath + "' \"Perform the deep dive as described in your system prompt.\"",
-			"EXIT_CODE=$?",
-			"echo \"\"",
-			"if [ $EXIT_CODE -eq 0 ]; then",
-			"    echo \"✓ Chapter complete: " + chapter.title + "\"",
-			"else",
-			"    echo \"✗ Chapter failed (exit code: $EXIT_CODE): " + chapter.title + "\"",
-			"fi",
-			"echo \"$EXIT_CODE\" > '" + escapedStatusFile + "'",
-		].join("\n");
+	const analysisScriptPath = path.join(tmpDir, "analyze.sh");
+	await writeFile(analysisScriptPath, analysisScript, "utf-8");
+	execSync("chmod +x '" + analysisScriptPath.replace(/'/g, "'\\''") + "'");
 
-		const scriptPath = path.join(tmpDir, "run-" + chapter.id + ".sh");
-		await writeFile(scriptPath, scriptContent, "utf-8");
-		execSync("chmod +x '" + escapedScriptPath + "'");
+	// Run analysis in the tmux analysis window
+	try {
+		execSync(
+			"tmux send-keys -t " + sessionName + ":analysis \"bash '" + analysisScriptPath.replace(/'/g, "'\\''") + "'\" Enter",
+			{ stdio: ["pipe", "pipe", "pipe"] },
+		);
+	} catch {
+		ctx.ui.notify("Failed to start analysis. Falling back to inline mode.", "warning");
+		const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, chapters, config);
+		pi.sendUserMessage(prompt);
+		return;
+	}
+
+	// Wait for analysis to complete (poll for status file)
+	const waitForFile = (filePath: string): Promise<string> => {
+		return new Promise((resolve) => {
+			const check = () => {
+				if (existsSync(filePath)) {
+					try {
+						resolve(readFileSync(filePath, "utf-8").trim());
+					} catch {
+						resolve("");
+					}
+				} else {
+					setTimeout(check, 2000);
+				}
+			};
+			check();
+		});
+	};
+
+	const analysisExitCodeStr = await waitForFile(analysisStatusFile);
+	const analysisExitCode = parseInt(analysisExitCodeStr, 10);
+	analysisEndTime = Date.now();
+
+	if (analysisExitCode !== 0) {
+		analysisStatus = "failed";
+		updateWidget();
+		ctx.ui.notify("Analysis failed (exit code: " + analysisExitCode + "). Falling back to inline mode.", "warning");
+		const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, chapters, config);
+		pi.sendUserMessage(prompt);
+		return;
+	}
+
+	// Get the analysis session path for forking
+	let analysisSessionPath = "";
+	try {
+		analysisSessionPath = readFileSync(analysisSessionPathFile, "utf-8").trim();
+	} catch {
+		// Fall through to fallback search
+	}
+
+	if (!analysisSessionPath || !existsSync(analysisSessionPath)) {
+		// Fallback: find the session file ourselves
+		try {
+			analysisSessionPath = execSync(
+				"find '" + escapedSessionDir + "' -name '*.jsonl' -type f 2>/dev/null | sort -r | head -1",
+				{ encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+			).trim();
+		} catch {
+			// Can't find session
+		}
+	}
+
+	if (!analysisSessionPath || !existsSync(analysisSessionPath)) {
+		analysisStatus = "failed";
+		updateWidget();
+		ctx.ui.notify("Analysis session file not found. Falling back to inline mode.", "warning");
+		const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, chapters, config);
+		pi.sendUserMessage(prompt);
+		return;
+	}
+
+	analysisStatus = "done";
+	updateWidget();
+	ctx.ui.notify(
+		"Phase 2: Forking analysis to " + chapters.length + " chapter workers (concurrency: " + concurrency + ")...",
+		"info",
+	);
+
+	// ─── Phase 2: Fork Chapter Workers ───────────────────
+
+	// Write per-chapter task files. Each worker gets a focused task prompt
+	// since the full codebase analysis is already in the forked session context.
+	for (const chapter of chapters) {
+		const task = buildWorkerTaskPrompt(tutorialDir, sourceDir, chapter, config);
+		const taskPath = path.join(tmpDir, "task-" + chapter.id + ".md");
+		await writeFile(taskPath, task, "utf-8");
 	}
 
 	// Poll for chapter completion via status files
@@ -815,9 +1018,12 @@ async function runParallelDeepDive(
 		});
 	};
 
-	// Worker pool: up to `concurrency` workers, each picks the next queued chapter
+	// Worker pool: up to `concurrency` workers, each picks the next queued chapter.
+	// Each worker forks the analysis session (--fork) into an ephemeral copy (--no-session),
+	// so workers share analysis context but are fully isolated from each other.
 	let nextIndex = 0;
 	const poolSize = Math.min(concurrency, chapters.length);
+	const escapedAnalysisSession = analysisSessionPath.replace(/'/g, "'\\''");
 	const workers = Array.from({ length: poolSize }, async () => {
 		while (nextIndex < chapters.length) {
 			const currentIndex = nextIndex++;
@@ -825,18 +1031,44 @@ async function runParallelDeepDive(
 			const windowName = sanitizeTmuxName(
 				"ch" + String(currentIndex + 1).padStart(2, "0") + "-" + chapter.id,
 			);
-			const scriptPath = path.join(tmpDir, "run-" + chapter.id + ".sh");
-			const escapedScriptPath = scriptPath.replace(/'/g, "'\\''");
+			const taskPath = path.join(tmpDir, "task-" + chapter.id + ".md");
+			const escapedTaskPath = taskPath.replace(/'/g, "'\\''");
+			const workerStatusFile = path.join(tmpDir, "status-" + chapter.id);
+			const escapedWorkerStatusFile = workerStatusFile.replace(/'/g, "'\\''");
 
 			// Mark as running
 			statuses[currentIndex].status = "running";
 			statuses[currentIndex].startTime = Date.now();
 			updateWidget();
 
-			// Create tmux window and run the wrapper script
+			// Worker script: fork from analysis session into an ephemeral worker.
+			// --fork copies the analysis session context (source files, analysis, insights)
+			// --no-session ensures each worker is isolated (no saved session, no cross-worker visibility)
+			const workerScript = [
+				"#!/bin/bash",
+				"cd '" + escapedCwd + "'",
+				"echo '=== Deep Dive: " + chapter.title + " (" + chapter.id + ") ==='",
+				"echo 'Forking from analysis session...'",
+				"echo ''",
+				"pi --fork '" + escapedAnalysisSession + "' --no-session -p @'" + escapedTaskPath + "'",
+				"EXIT_CODE=$?",
+				"echo ''",
+				"if [ $EXIT_CODE -eq 0 ]; then",
+				"    echo '✓ Chapter complete: " + chapter.title + "'",
+				"else",
+				"    echo '✗ Chapter failed (exit code: $EXIT_CODE): " + chapter.title + "'",
+				"fi",
+				"echo \"$EXIT_CODE\" > '" + escapedWorkerStatusFile + "'",
+			].join("\n");
+
+			const workerScriptPath = path.join(tmpDir, "run-" + chapter.id + ".sh");
+			await writeFile(workerScriptPath, workerScript, "utf-8");
+			execSync("chmod +x '" + workerScriptPath.replace(/'/g, "'\\''") + "'");
+
+			// Create tmux window and run the worker
 			try {
 				execSync(
-					"tmux new-window -t " + sessionName + " -n \"" + windowName + "\" \"bash '" + escapedScriptPath + "'\"",
+					"tmux new-window -t " + sessionName + " -n \"" + windowName + "\" \"bash '" + workerScriptPath.replace(/'/g, "'\\''") + "'\"",
 					{ stdio: ["pipe", "pipe", "pipe"] },
 				);
 			} catch {
@@ -864,6 +1096,9 @@ async function runParallelDeepDive(
 		(sum, s) => sum + ((s.endTime && s.startTime) ? (s.endTime - s.startTime) : 0),
 		0,
 	);
+	const analysisDuration = analysisEndTime
+		? ((analysisEndTime - analysisStartTime) / 1000).toFixed(0)
+		: "?";
 
 	updateWidget();
 
@@ -871,7 +1106,8 @@ async function runParallelDeepDive(
 	if (failed === 0) {
 		summary =
 			"Deep dive complete: **" + done + "/" + chapters.length + "** chapters expanded.\n\n" +
-			"Total time: " + (totalDuration / 1000).toFixed(0) + "s across all chapters.\n" +
+			"Phase 1 (analysis): " + analysisDuration + "s\n" +
+			"Phase 2 (chapters): " + (totalDuration / 1000).toFixed(0) + "s across all chapters\n" +
 			"tmux session `" + sessionName + "` is still available for review.\n\n" +
 			"All chapters expanded successfully. Next steps:\n" +
 			"- Verify the tutorial builds and runs correctly\n" +
@@ -883,7 +1119,8 @@ async function runParallelDeepDive(
 			.join("\n");
 		summary =
 			"Deep dive complete: **" + done + "/" + chapters.length + "** chapters expanded, **" + failed + "** failed.\n\n" +
-			"Total time: " + (totalDuration / 1000).toFixed(0) + "s across all chapters.\n" +
+			"Phase 1 (analysis): " + analysisDuration + "s\n" +
+			"Phase 2 (chapters): " + (totalDuration / 1000).toFixed(0) + "s across all chapters\n" +
 			"tmux session `" + sessionName + "` is still available for review.\n\n" +
 			"Failed chapters can be re-run individually:\n" + retryLines;
 	}
