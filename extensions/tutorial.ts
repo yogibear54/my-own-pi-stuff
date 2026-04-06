@@ -687,26 +687,37 @@ async function runParallelDeepDive(
 	}));
 
 	const updateWidget = () => {
-		const lines: string[] = ["─── Deep Dive Progress ──────────────────"];
-		for (const s of statuses) {
-			const icon =
-				s.status === "done" ? "✓" :
-				s.status === "failed" ? "✗" :
-				s.status === "running" ? "⏳" : "·";
-			const dur = s.endTime && s.startTime
-				? " (" + ((s.endTime - s.startTime) / 1000).toFixed(0) + "s)"
-				: "";
-			const id = s.chapter.id;
-			lines.push("  " + icon + " " + id.padEnd(20) + " " + s.chapter.title + dur);
-		}
-		const done = statuses.filter(s => s.status === "done").length;
-		const failed = statuses.filter(s => s.status === "failed").length;
-		const running = statuses.filter(s => s.status === "running").length;
-		const queued = statuses.filter(s => s.status === "queued").length;
-		lines.push("─────────────────────────────────────────");
-		lines.push("  " + done + "/" + chapters.length + " done  " + running + " running  " + queued + " queued  " + failed + " failed");
-		lines.push("  tmux attach -t " + sessionName);
-		ctx.ui.setWidget("tutorial-deep-dive", lines);
+		// Use render function form for proper dynamic updates
+		ctx.ui.setWidget("tutorial-deep-dive", (_tui, theme) => {
+			const lines: string[] = [theme.fg("accent", "─── Deep Dive Progress ─────────────────────────────────────────────────────────")];
+			for (const s of statuses) {
+				const icon =
+					s.status === "done" ? theme.fg("success", "✓") :
+					s.status === "failed" ? theme.fg("error", "✗") :
+					s.status === "running" ? theme.fg("accent", "⏳") : "·";
+				const dur = s.endTime && s.startTime
+					? theme.fg("muted", " (" + ((s.endTime - s.startTime) / 1000).toFixed(0) + "s)")
+					: "";
+				const id = theme.fg("dim", s.chapter.id);
+				const title = s.chapter.title;
+				lines.push("  " + icon + " " + id + " " + title + dur);
+			}
+			const done = statuses.filter(s => s.status === "done").length;
+			const failed = statuses.filter(s => s.status === "failed").length;
+			const running = statuses.filter(s => s.status === "running").length;
+			const queued = statuses.filter(s => s.status === "queued").length;
+			lines.push(theme.fg("border", "────────────────────────────────────────────────────────────────────────────────────────────"));
+			lines.push(theme.fg("muted", "  " + done + "/" + chapters.length + " done  " + running + " running  " + queued + " queued  " + failed + " failed"));
+			lines.push(theme.fg("dim", "  tmux attach -t " + sessionName));
+			return {
+				render(_width: number): string[] {
+					return lines;
+				},
+				invalidate(): void {
+					// Nothing to invalidate - lines are rebuilt on each updateWidget call
+				},
+			};
+		});
 	};
 
 	// Create tmux session (kill any existing one with the same name)
