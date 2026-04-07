@@ -30,19 +30,19 @@ export function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 	const DEEP_DIVE_DESCRIPTION =
 		"Deep-dive into skeleton tutorial chapters with detailed analysis. " +
 		"Expands all chapters or a specific chapter. " +
-		"Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N]";
+		"Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N] [--deep-dive-debug-tmp]";
 
 	const handler = async (args: string, ctx: ExtensionContext) => {
 		const argParts = (args || "").trim().split(/\s+/).filter(Boolean);
 
 		if (argParts.length < 1) {
-			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N]", "error");
+			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N] [--deep-dive-debug-tmp]", "error");
 			return;
 		}
 
 		const parsed = parseDeepDiveArgs(argParts);
 		if (!parsed.tutorialDir) {
-			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N]", "error");
+			ctx.ui.notify("Usage: /tutorial:deep-dive <tutorial-dir> [source-code-dir] [chapter-id] [--concurrency N] [--deep-dive-debug-tmp]", "error");
 			return;
 		}
 
@@ -85,7 +85,6 @@ export function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 
 		const chapterCount = targetChapters.length;
 		const isSingle = chapterCount === 1;
-
 		// Single chapter or no tmux -> inline mode
 		if (isSingle || !checkTmuxAvailable()) {
 			ctx.ui.notify(
@@ -103,7 +102,7 @@ export function registerTutorialDeepDiveCommand(pi: ExtensionAPI) {
 			"info",
 		);
 
-		runParallelDeepDive(pi, ctx, parsed.tutorialDir, sourceDir, targetChapters, config, parsed.concurrency).catch(err => {
+		runParallelDeepDive(pi, ctx, parsed.tutorialDir, sourceDir, targetChapters, config, parsed.concurrency, parsed.deepDiveDebugTmp).catch(err => {
 			ctx.ui.notify("Deep dive error: " + err.message, "error");
 			ctx.ui.setWidget("tutorial-deep-dive", []);
 		});
@@ -122,6 +121,7 @@ interface ParsedDeepDiveArgs {
 	sourceDirOverride: string | null;
 	chapterId: string | null;
 	concurrency: number;
+	deepDiveDebugTmp: boolean;
 }
 
 function parseDeepDiveArgs(argParts: string[]): ParsedDeepDiveArgs {
@@ -129,6 +129,7 @@ function parseDeepDiveArgs(argParts: string[]): ParsedDeepDiveArgs {
 	let sourceDirOverride: string | null = null;
 	let chapterId: string | null = null;
 	let concurrency = DEFAULT_CONCURRENCY;
+	let deepDiveDebugTmp = false;
 	const positionalArgs: string[] = [];
 
 	const looksLikePathArg = (value: string): boolean => {
@@ -157,6 +158,8 @@ function parseDeepDiveArgs(argParts: string[]): ParsedDeepDiveArgs {
 		} else if (part.startsWith("--source=")) {
 			const value = part.split("=").slice(1).join("=");
 			sourceDirOverride = value.startsWith("@") ? value.slice(1) : value;
+		} else if (part === "--deep-dive-debug-tmp") {
+			deepDiveDebugTmp = true;
 		} else if (!part.startsWith("--")) {
 			positionalArgs.push(part);
 		}
@@ -180,7 +183,7 @@ function parseDeepDiveArgs(argParts: string[]): ParsedDeepDiveArgs {
 		}
 	}
 
-	return { tutorialDir, sourceDirOverride, chapterId, concurrency };
+	return { tutorialDir, sourceDirOverride, chapterId, concurrency, deepDiveDebugTmp };
 }
 
 // ─── Error Helpers ───────────────────────────────────────────────────
@@ -236,6 +239,7 @@ async function runParallelDeepDive(
 	chapters: ChapterEntry[],
 	config: TutorialConfig | undefined,
 	concurrency: number,
+	debugTmpOnly = false,
 ): Promise<void> {
 	const projectSlug = sanitizeTmuxName(path.basename(tutorialDir));
 	const sessionName = "tdd-" + projectSlug;
@@ -300,25 +304,27 @@ async function runParallelDeepDive(
 	};
 
 	// Create tmux session
-	try {
-		execSync(
-			"tmux kill-session -t " + sessionName + " 2>/dev/null; " +
-			"tmux new-session -d -s " + sessionName + " -x 200 -y 50",
-			{ stdio: ["pipe", "pipe", "pipe"] },
-		);
-	} catch {
-		ctx.ui.notify("Failed to create tmux session. Falling back to inline mode.", "warning");
-		const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, chapters, config);
-		pi.sendUserMessage(prompt);
-		return;
-	}
+	if (!debugTmpOnly) {
+		try {
+			execSync(
+				"tmux kill-session -t " + sessionName + " 2>/dev/null; " +
+				"tmux new-session -d -s " + sessionName + " -x 200 -y 50",
+				{ stdio: ["pipe", "pipe", "pipe"] },
+			);
+		} catch {
+			ctx.ui.notify("Failed to create tmux session. Falling back to inline mode.", "warning");
+			const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, chapters, config);
+			pi.sendUserMessage(prompt);
+			return;
+		}
 
-	try {
-		execSync("tmux rename-window -t " + sessionName + ":0 \"analysis\"", {
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-	} catch {
-		// Non-critical
+		try {
+			execSync("tmux rename-window -t " + sessionName + ":0 \"analysis\"", {
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+		} catch {
+			// Non-critical
+		}
 	}
 
 	updateWidget();
@@ -360,25 +366,29 @@ async function runParallelDeepDive(
 	const analysisScriptPath = path.join(tmpDir, "analyze.sh");
 	await writeFile(analysisScriptPath, analysisScript, "utf-8");
 	execSync("chmod +x '" + analysisScriptPath.replace(/'/g, "'\\''") + "'");
-
-	try {
-		execSync(
-			"tmux send-keys -t " + sessionName + ":analysis \"bash '" + analysisScriptPath.replace(/'/g, "'\\''") + "'\" Enter",
-			{ stdio: ["pipe", "pipe", "pipe"] },
-		);
-	} catch {
-		ctx.ui.notify("Failed to start analysis. Falling back to inline mode.", "warning");
-		const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, chapters, config);
-		pi.sendUserMessage(prompt);
-		return;
+	ctx.ui.notify("test1");
+	if (!debugTmpOnly) {
+		try {
+			execSync(
+				"tmux send-keys -t " + sessionName + ":analysis \"bash '" + analysisScriptPath.replace(/'/g, "'\\''") + "'\" Enter",
+				{ stdio: ["pipe", "pipe", "pipe"] },
+			);
+		} catch {
+			ctx.ui.notify("Failed to start analysis. Falling back to inline mode.", "warning");
+			const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, chapters, config);
+			pi.sendUserMessage(prompt);
+			return;
+		}
 	}
+	ctx.ui.notify("test2");
 
 	// Wait for analysis to complete
-	const analysisExitCodeStr = await waitForFile(analysisStatusFile);
+	const analysisExitCodeStr = debugTmpOnly ? "0" : await waitForFile(analysisStatusFile);
 	const analysisExitCode = parseInt(analysisExitCodeStr, 10);
 	analysisEndTime = Date.now();
-
+	
 	if (analysisExitCode !== 0) {
+		
 		analysisStatus = "failed";
 		updateWidget();
 		ctx.ui.notify("Analysis failed (exit code: " + analysisExitCode + "). Falling back to inline mode.", "warning");
@@ -386,7 +396,7 @@ async function runParallelDeepDive(
 		pi.sendUserMessage(prompt);
 		return;
 	}
-
+	ctx.ui.notify("test3");
 	// Get the analysis session path for forking
 	let analysisSessionPath = "";
 	try {
@@ -394,7 +404,7 @@ async function runParallelDeepDive(
 	} catch {
 		// Fall through to fallback search
 	}
-
+	ctx.ui.notify("test4");
 	if (!analysisSessionPath || !existsSync(analysisSessionPath)) {
 		try {
 			analysisSessionPath = execSync(
@@ -405,23 +415,25 @@ async function runParallelDeepDive(
 			// Can't find session
 		}
 	}
-
-	if (!analysisSessionPath || !existsSync(analysisSessionPath)) {
-		analysisStatus = "failed";
-		updateWidget();
-		ctx.ui.notify("Analysis session file not found. Falling back to inline mode.", "warning");
-		const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, chapters, config);
-		pi.sendUserMessage(prompt);
-		return;
+	ctx.ui.notify("test5");
+	if (!debugTmpOnly) {
+		if (!analysisSessionPath || !existsSync(analysisSessionPath)) {
+			analysisStatus = "failed";
+			updateWidget();
+			ctx.ui.notify("Analysis session file not found. Falling back to inline mode.", "warning");
+			const prompt = buildDeepDivePrompt(tutorialDir, sourceDir, chapters, config);
+			pi.sendUserMessage(prompt);
+			return;
+		}
 	}
-
+	ctx.ui.notify("test6");
 	analysisStatus = "done";
 	updateWidget();
 	ctx.ui.notify(
 		"Phase 2: Forking analysis to " + chapters.length + " chapter workers (concurrency: " + concurrency + ")...",
 		"info",
 	);
-
+	ctx.ui.notify("test7");
 	// ─── Phase 2: Fork Chapter Workers ───────────────────
 
 	for (const chapter of chapters) {
@@ -453,11 +465,11 @@ async function runParallelDeepDive(
 			check();
 		});
 	};
-
+	ctx.ui.notify("test8");
 	let nextIndex = 0;
 	const poolSize = Math.min(concurrency, chapters.length);
 	const escapedAnalysisSession = analysisSessionPath.replace(/'/g, "'\\''");
-
+	ctx.ui.notify("test9");
 	const workers = Array.from({ length: poolSize }, async () => {
 		while (nextIndex < chapters.length) {
 			const currentIndex = nextIndex++;
@@ -495,24 +507,28 @@ async function runParallelDeepDive(
 			await writeFile(workerScriptPath, workerScript, "utf-8");
 			execSync("chmod +x '" + workerScriptPath.replace(/'/g, "'\\''") + "'");
 
-			try {
-				execSync(
-					"tmux new-window -t " + sessionName + " -n \"" + windowName + "\" \"bash '" + workerScriptPath.replace(/'/g, "'\\''") + "'\"",
-					{ stdio: ["pipe", "pipe", "pipe"] },
-				);
-			} catch {
-				statuses[currentIndex].status = "failed";
-				statuses[currentIndex].endTime = Date.now();
-				updateWidget();
-				continue;
-			}
+			if (!debugTmpOnly) {
+				try {
+					execSync(
+						"tmux new-window -t " + sessionName + " -n \"" + windowName + "\" \"bash '" + workerScriptPath.replace(/'/g, "'\\''") + "'\"",
+						{ stdio: ["pipe", "pipe", "pipe"] },
+					);
+				} catch {
+					statuses[currentIndex].status = "failed";
+					statuses[currentIndex].endTime = Date.now();
+					updateWidget();
+					continue;
+				}
 
-			await waitForCompletion(currentIndex);
+				await waitForCompletion(currentIndex);
+			}
 		}
 	});
+	ctx.ui.notify("chapters: " + chapters);
+	ctx.ui.notify("test10");
 
 	await Promise.all(workers);
-
+	ctx.ui.notify("test11");
 	// ─── Final Summary ───────────────────────────────────
 
 	const done = statuses.filter(s => s.status === "done").length;
@@ -529,26 +545,30 @@ async function runParallelDeepDive(
 	updateWidget();
 
 	let summary: string;
-	if (failed === 0) {
-		summary =
-			"Deep dive complete: **" + done + "/" + chapters.length + "** chapters expanded.\n\n" +
-			"Phase 1 (analysis): " + analysisDuration + "s\n" +
-			"Phase 2 (chapters): " + (totalDuration / 1000).toFixed(0) + "s across all chapters\n" +
-			"tmux session `" + sessionName + "` is still available for review.\n\n" +
-			"All chapters expanded successfully. Next steps:\n" +
-			"- Verify the tutorial builds and runs correctly\n" +
-			"- Update the README.md status to Complete\n" +
-			"- Run `/tutorial:update` later to keep chapters in sync with source changes";
+	if (!debugTmpOnly) {
+		if (failed === 0) {
+			summary =
+				"Deep dive complete: **" + done + "/" + chapters.length + "** chapters expanded.\n\n" +
+				"Phase 1 (analysis): " + analysisDuration + "s\n" +
+				"Phase 2 (chapters): " + (totalDuration / 1000).toFixed(0) + "s across all chapters\n" +
+				"tmux session `" + sessionName + "` is still available for review.\n\n" +
+				"All chapters expanded successfully. Next steps:\n" +
+				"- Verify the tutorial builds and runs correctly\n" +
+				"- Update the README.md status to Complete\n" +
+				"- Run `/tutorial:update` later to keep chapters in sync with source changes";
+		} else {
+			const retryLines = failedChapters
+				.map(id => "  `/tutorial:deep-dive " + tutorialDir + " " + id + "`")
+				.join("\n");
+			summary =
+				"Deep dive complete: **" + done + "/" + chapters.length + "** chapters expanded, **" + failed + "** failed.\n\n" +
+				"Phase 1 (analysis): " + analysisDuration + "s\n" +
+				"Phase 2 (chapters): " + (totalDuration / 1000).toFixed(0) + "s across all chapters\n" +
+				"tmux session `" + sessionName + "` is still available for review.\n\n" +
+				"Failed chapters can be re-run individually:\n" + retryLines;
+		}
 	} else {
-		const retryLines = failedChapters
-			.map(id => "  `/tutorial:deep-dive " + tutorialDir + " " + id + "`")
-			.join("\n");
-		summary =
-			"Deep dive complete: **" + done + "/" + chapters.length + "** chapters expanded, **" + failed + "** failed.\n\n" +
-			"Phase 1 (analysis): " + analysisDuration + "s\n" +
-			"Phase 2 (chapters): " + (totalDuration / 1000).toFixed(0) + "s across all chapters\n" +
-			"tmux session `" + sessionName + "` is still available for review.\n\n" +
-			"Failed chapters can be re-run individually:\n" + retryLines;
+		summary = "This is a debug run: " + done + "/" + chapters.length + " chapters expanded, " + failed + " failed.";
 	}
 
 	pi.sendUserMessage(summary);
