@@ -16,9 +16,11 @@ Usage:
     ./extract.py <pdf_path> [mode] [--pretty] [--output FILE]
 
 Examples:
-    ./extract.py document.pdf                    # Full text extraction
-    ./extract.py document.pdf summary            # Summary mode
-    ./extract.py document.pdf markdown --pretty  # Markdown with pretty output
+    ./extract.py document.pdf                           # Full text extraction
+    ./extract.py document.pdf summary                   # Summary mode
+    ./extract.py document.pdf markdown --pretty         # Markdown with pretty output
+    ./extract.py document.pdf html --per-page           # HTML with per-page output
+    ./extract.py document.pdf --mode full_text --async  # Async extraction
 """
 
 import argparse
@@ -147,7 +149,7 @@ def main() -> int:
         "mode",
         nargs="?",
         default="full_text",
-        choices=["full_text", "summary", "structured", "markdown", "prompt"],
+        choices=["full_text", "summary", "structured", "markdown", "html", "prompt"],
         help="Extraction mode (default: full_text)",
     )
     parser.add_argument("--dir", help="Override PDF Extractor installation directory")
@@ -161,6 +163,73 @@ def main() -> int:
         default="persistent",
         choices=["persistent", "ephemeral", "disabled"],
         help="Cache mode",
+    )
+    parser.add_argument(
+        "--per-page",
+        action="store_true",
+        help="Write per-page output files (for markdown/html modes)",
+    )
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=None,
+        help="DPI for rendered page images (e.g., 150, 300)",
+    )
+    parser.add_argument(
+        "--image-max-long-edge",
+        type=int,
+        default=None,
+        help="Maximum pixel size for the longest edge of rendered images",
+    )
+    parser.add_argument(
+        "--async",
+        dest="use_async",
+        action="store_true",
+        help="Use async processing for faster concurrent page processing",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Maximum number of PDFs to process in parallel (default: 4)",
+    )
+    parser.add_argument(
+        "--max-concurrent-pages",
+        type=int,
+        default=None,
+        help="Maximum number of pages to process concurrently per PDF (default: 4)",
+    )
+    parser.add_argument(
+        "--async-rps",
+        type=float,
+        default=None,
+        help="Async requests per second rate limit (default: 8.0)",
+    )
+    parser.add_argument(
+        "--stop-on-error",
+        action="store_true",
+        help="Stop batch processing on first error (fail fast)",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model to use (e.g., openai/gpt-4o, openrouter/auto)",
+    )
+    parser.add_argument(
+        "--openrouter-api-key",
+        default=None,
+        help="OpenRouter API key (or set OPENROUTER_API_KEY env var)",
+    )
+    parser.add_argument(
+        "--replicate-api-token",
+        default=None,
+        help="Replicate API token (or set REPLICATE_API_TOKEN env var)",
+    )
+    parser.add_argument(
+        "--replicate-max-concurrent-calls",
+        type=int,
+        default=None,
+        help="Maximum concurrent Replicate API calls (default: 1)",
     )
 
     parsed = parser.parse_args()
@@ -187,6 +256,42 @@ def main() -> int:
 
     if parsed.schema:
         args.extend(["--schema-import", parsed.schema])
+
+    if parsed.per_page:
+        args.append("--per-page")
+
+    if parsed.dpi is not None:
+        args.extend(["--dpi", str(parsed.dpi)])
+
+    if parsed.image_max_long_edge is not None:
+        args.extend(["--image-max-long-edge", str(parsed.image_max_long_edge)])
+
+    if parsed.use_async:
+        args.append("--async")
+
+    if parsed.max_workers is not None:
+        args.extend(["--max-workers", str(parsed.max_workers)])
+
+    if parsed.max_concurrent_pages is not None:
+        args.extend(["--max-concurrent-pages", str(parsed.max_concurrent_pages)])
+
+    if parsed.async_rps is not None:
+        args.extend(["--async-rps", str(parsed.async_rps)])
+
+    if parsed.stop_on_error:
+        args.append("--stop-on-error")
+
+    if parsed.model:
+        args.extend(["--model", parsed.model])
+
+    if parsed.openrouter_api_key:
+        args.extend(["--openrouter-api-key", parsed.openrouter_api_key])
+
+    if parsed.replicate_api_token:
+        args.extend(["--replicate-api-token", parsed.replicate_api_token])
+
+    if parsed.replicate_max_concurrent_calls is not None:
+        args.extend(["--replicate-max-concurrent-calls", str(parsed.replicate_max_concurrent_calls)])
 
     return run_extractor(args)
 
