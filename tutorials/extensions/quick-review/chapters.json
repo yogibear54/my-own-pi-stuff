@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "updatedAt": "2026-04-08T23:45:00.000Z",
+  "config": {
+    "tutorialDir": "tutorials/extensions/quick-review/",
+    "sourceDir": "extensions/quick-review.ts",
+    "projectName": "quick-review",
+    "audience": "Developers familiar with JavaScript but new to TypeScript",
+    "goals": ["Navigate the codebase", "Understand architecture patterns", "Make small changes", "Debug common issues"],
+    "scope": "detailed",
+    "includeQuizzes": true,
+    "includeDiagrams": true,
+    "techStack": "react"
+  },
+  "chapters": [
+    {
+      "id": "architecture-overview",
+      "title": "Architecture Overview",
+      "sourceFiles": ["extensions/quick-review.ts"],
+      "chapterFile": "src/chapters/ArchitectureOverview.tsx"
+    },
+    {
+      "id": "key-modules",
+      "title": "Key Modules",
+      "sourceFiles": ["extensions/quick-review.ts"],
+      "chapterFile": "src/chapters/KeyModules.tsx"
+    },
+    {
+      "id": "data-flow",
+      "title": "Data Flow",
+      "sourceFiles": ["extensions/quick-review.ts"],
+      "chapterFile": "src/chapters/DataFlow.tsx"
+    },
+    {
+      "id": "typescript-patterns",
+      "title": "TypeScript Patterns",
+      "sourceFiles": ["extensions/quick-review.ts"],
+      "chapterFile": "src/chapters/TypeScriptPatterns.tsx"
+    },
+    {
+      "id": "configuration-entry",
+      "title": "Configuration & Entry Points",
+      "sourceFiles": ["extensions/quick-review.ts"],
+      "chapterFile": "src/chapters/ConfigurationEntry.tsx"
+    }
+  ]
+}
