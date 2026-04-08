@@ -33,7 +33,7 @@ export function buildWorkerTaskPrompt(
 	];
 
 	if (chapter.chapterFile) {
-		lines.push("**Chapter component to update**: `" + chapter.chapterFile + "`");
+		lines.push("**Chapter component to update**: `" + tutorialDir + "/" + chapter.chapterFile + "`");
 	}
 
 	lines.push(
