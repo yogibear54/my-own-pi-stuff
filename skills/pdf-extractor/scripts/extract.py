@@ -155,7 +155,7 @@ def main() -> int:
     parser.add_argument("--output", help="Output file path")
     parser.add_argument("--prompt", help="Custom prompt for PROMPT mode")
     parser.add_argument("--schema", help="Schema import path for structured mode (module:ClassName)")
-    parser.add_argument("--provider", default="replicate", help="LLM provider")
+    parser.add_argument("--provider", default="openrouter", help="LLM provider")
     parser.add_argument(
         "--cache-mode",
         default="persistent",
