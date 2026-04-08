@@ -5,6 +5,7 @@
  * - Both thinking and text go to stderr
  * - [thinking] prefix in gray
  * - [text] prefix in cyan
+ * - [tool] prefix in yellow (shows tool name, args, and results)
  * - Prefixes only appear at the start of each content block
  *
  * Usage: pi -p --stream=on "your prompt"
@@ -21,8 +22,17 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 const colors = {
 	gray: "\x1b[90m",
 	cyan: "\x1b[36m",
+	yellow: "\x1b[33m",
+	red: "\x1b[31m",
 	reset: "\x1b[0m",
 };
+
+// Truncate tool args/result for readable output
+function truncate(val: unknown, maxLen = 300): string {
+	const s = typeof val === "string" ? val : JSON.stringify(val, null, 2);
+	if (s.length <= maxLen) return s;
+	return s.slice(0, maxLen) + "…";
+}
 
 export default function streamOutputExtension(pi: ExtensionAPI): void {
 	pi.registerFlag("stream", {
@@ -67,6 +77,29 @@ export default function streamOutputExtension(pi: ExtensionAPI): void {
 			inTextBlock = false;
 			process.stderr.write(`${colors.reset}\n\n`);
 		}
+	});
+
+	// Stream tool use messages
+	pi.on("tool_execution_start", async (event) => {
+		if (pi.getFlag("stream") !== "on") return;
+		process.stderr.write(
+			`${colors.yellow}[tool] ${event.toolName}(${truncate(event.args)})${colors.reset}\n`,
+		);
+	});
+
+	pi.on("tool_execution_update", async (event) => {
+		if (pi.getFlag("stream") !== "on") return;
+		if (event.partialResult) {
+			process.stderr.write(
+				`${colors.yellow}[tool] ${event.toolName} → ${truncate(event.partialResult)}${colors.reset}\n`,
+			);
+		}
+	});
+
+	pi.on("tool_execution_end", async (event) => {
+		if (pi.getFlag("stream") !== "on") return;
+		const label = event.isError ? `${colors.red}[tool] ${event.toolName} ✗` : `${colors.yellow}[tool] ${event.toolName} ✓`;
+		process.stderr.write(`${label} ${truncate(event.result)}${colors.reset}\n\n`);
 	});
 
 	pi.on("agent_end", async () => {
