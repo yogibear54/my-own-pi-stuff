@@ -54,7 +54,7 @@ export function registerConfigureTutorialTool(pi: ExtensionAPI) {
 				projectName: params.projectName || inferProjectName(params.tutorialDir),
 				audience: params.audience || "Developers familiar with JavaScript but new to TypeScript",
 				goals: params.goals || ["Navigate the codebase", "Understand architecture patterns"],
-				scope: params.scope || "detailed",
+				scope: params.scope || "comprehensive",
 				includeQuizzes: params.includeQuizzes ?? true,
 				includeDiagrams: params.includeDiagrams ?? true,
 				techStack: params.techStack || "react",

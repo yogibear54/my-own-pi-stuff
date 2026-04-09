@@ -22,40 +22,23 @@ export function buildAnalysisPrompt(
 	const scope = config?.scope || "detailed";
 
 	const lines: string[] = [
-		"Perform a COMPREHENSIVE ANALYSIS of the codebase for a tutorial deep-dive.",
+		"Perform a COMPREHENSIVE ANALYSIS of the tutorial codebase for a tutorial deep-dive.",
 		"",
 		"## Objective",
 		"",
-		"Analyze the source codebase thoroughly so that tutorial chapters can be expanded with accurate, detailed content.",
+		"Analyze the tutorial codebase thoroughly so that tutorial chapters can be expanded accurately.",
 		"Your analysis will be shared as context with workers that expand individual chapters.",
-		"Read every file listed below and build a thorough understanding of the codebase.",
+		"Read every file listed below and build a thorough understanding of the tutorial codebase.",
 		"",
 		"## Tutorial Configuration",
 		"",
 		"- **Tutorial Directory**: " + tutorialDir,
-		"- **Source Codebase**: " + sourceDir,
 		"- **Audience**: " + audience,
 		"- **Learning Goals**: " + goals.join(", "),
 		"- **Scope**: " + scope,
 		"",
-		"## Source Files to Analyze",
-		"",
-		"Read ALL of the following source files (unique across all chapters):",
-		"",
 	];
 
-	for (const file of allSourceFiles) {
-		lines.push("- `" + file + "`");
-	}
-
-	lines.push("");
-	lines.push("## Chapter-to-File Mapping");
-	lines.push("");
-	for (const ch of chapters) {
-		lines.push("**" + ch.title + "** (`" + ch.id + "`): " + ch.sourceFiles.map(f => "`" + f + "`").join(", "));
-	}
-
-	lines.push("");
 	lines.push("## Analysis Instructions");
 	lines.push("");
 	lines.push("### Step 1: Explore Directory Structure");
@@ -64,16 +47,7 @@ export function buildAnalysisPrompt(
 	lines.push("- Identify the architecture pattern (clean architecture, MVC, modular, etc.)");
 	lines.push("- Note entry points and configuration files");
 	lines.push("");
-	lines.push("### Step 2: Read All Source Files");
-	lines.push("Read EVERY source file listed above from \"" + sourceDir + "\". For each file, note:");
-	lines.push("- Its purpose and role in the architecture");
-	lines.push("- Key patterns, abstractions, and interfaces");
-	lines.push("- Dependencies and interactions with other modules");
-	lines.push("- Data flow in and out");
-	lines.push("- Error handling strategies");
-	lines.push("- Edge cases and notable implementation details");
-	lines.push("");
-	lines.push("### Step 3: Read Tutorial Skeleton");
+	lines.push("### Step 2: Read Tutorial Skeleton");
 	lines.push("Read the current skeleton tutorial in \"" + tutorialDir + "\":");
 	lines.push("- Explore the tutorial project structure");
 	for (const ch of chapters) {
@@ -83,7 +57,7 @@ export function buildAnalysisPrompt(
 	}
 	lines.push("- Understand the tutorial's tech stack, navigation, and component structure");
 	lines.push("");
-	lines.push("### Step 4: Provide Structured Analysis");
+	lines.push("### Step 3: Provide Structured Analysis");
 	lines.push("After reading all files, provide a comprehensive analysis covering:");
 	lines.push("");
 	lines.push("1. **Architecture Overview**: High-level architecture pattern, module organization, key abstractions");

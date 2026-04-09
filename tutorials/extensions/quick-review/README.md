@@ -7,7 +7,7 @@
 | **Source Project** | quick-review.ts |
 | **Source Location** | `extensions/quick-review.ts` |
 | **Based On Commit** | `62f85b517c864430d88721f58481613467420dc3` |
-| **Status** | 🏗️ Skeleton (Pass 1) — use `/tutorial:deep-dive` to expand |
+| **Status** | ✅ Complete — 5/5 chapters expanded |
 
 ---
 
@@ -25,7 +25,7 @@
 
 | Date | Version | Update Details |
 |------|---------|----------------|
-| 2026-04-08 | 0.1.0 | Skeleton tutorial created (Pass 1) |
+| 2026-04-09 | 1.0.0 | All 5 chapters expanded and verified |
 
 ---
 
