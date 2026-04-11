@@ -28,7 +28,6 @@ The extraction mode to use:
 | Option | Description |
 |--------|-------------|
 | `full_text` | Transcribes all text with layout preservation |
-| `summary` | 3-5 sentence summary with key details |
 | `structured` | Extracts data matching a Pydantic schema |
 | `markdown` | Converts pages to Markdown with proper formatting |
 | `html` | Converts pages to HTML with styling |
