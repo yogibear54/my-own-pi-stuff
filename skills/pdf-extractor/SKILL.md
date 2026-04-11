@@ -9,13 +9,19 @@ Image-first PDF extraction and analysis using vision AI models via `scripts/extr
 
 ## When This Skill Is Used
 
-When the user wants to extract, analyze, summarize, or convert content from PDF documents, ask the following questions to configure the extraction. The PDF file path(s) are taken from the user's request directly.
+When the user wants to extract, analyze, summarize, or convert content from PDF documents, you **MUST** gather the following flag values before running the script. **Do not proceed to the extraction step until all required questions have been answered.**
 
-## Required Questions
+---
 
-Ask the user for the following flag values before running the script:
+## MANDATORY: Gather All Required Questions First
 
-### 1. `--mode` (select one)
+**You MUST ask the user for answers to ALL 6 questions below. Do NOT skip any question. Do NOT proceed to extraction until you have an answer for each question.**
+
+If the user provides partial answers, **STOP immediately** and ask only for the remaining unanswered questions. Continue this loop until all 6 questions have been answered.
+
+---
+
+### Question 1: `--mode` (required — select one)
 
 The extraction mode to use:
 
@@ -28,7 +34,7 @@ The extraction mode to use:
 | `html` | Converts pages to HTML with styling |
 | `prompt` | Custom prompt for flexible extraction |
 
-### 2. `--output` (select one)
+### Question 2: `--output` (required — select one)
 
 The output format:
 
@@ -38,21 +44,37 @@ The output format:
 | `markdown` | Save as `.md` file(s) |
 | `html` | Save as `.html` file(s) |
 
-### 3. `--image-max-long-edge` (required)
+### Question 3: `--image-max-long-edge` (required)
 
 Maximum pixel size for the longest edge of rendered page images. Default: `1024`. Increase for higher quality (e.g. `2048`), decrease for speed (e.g. `512`). The user must provide a value — suggest `1024` as the default.
 
-### 4. `--dpi` (required)
+### Question 4: `--dpi` (required)
 
 DPI for rendered page images. Typical values: `150`, `300`. The user must provide a value — suggest `300` as the default.
 
-### 5. `--per-page` (required — yes/no)
+### Question 5: `--per-page` (required — yes/no)
 
 Whether to write per-page output files. Only relevant for `markdown` and `html` output modes. The user must choose yes or no — suggest no as the default.
 
-### 6. Other flags (required — free text)
+### Question 6: Other flags (required — free text, can be empty)
 
-Ask the user if they want to pass any additional flags to the script. These are appended as-is to the command. For example: `--pretty`, `--prompt "..."`, `--model openai/gpt-4o`, `--async`, etc. The user must confirm — "none" means no additional flags.
+Ask the user if they want to pass any additional flags to the script. These are appended as-is to the command. For example: `--pretty`, `--prompt "..."`, `--model openai/gpt-4o`, `--async`, etc.
+
+**This question MUST be presented to the user, but the answer can be empty/null.** An empty response means no additional flags.
+
+---
+
+## Gathering Answers: Loop Until Complete
+
+Use the `questionnaire` tool to gather answers. If the user gives partial answers:
+
+1. Note which questions are answered
+2. Present a new questionnaire with ONLY the unanswered questions
+3. Repeat until all 6 questions have answers
+
+**Do not proceed to extraction until all 6 questions are answered.** If the user tries to skip or redirect before all questions are answered, firmly but politely repeat your request for the missing answers.
+
+---
 
 ## Running the Script
 
@@ -72,7 +94,9 @@ Once all values are gathered, construct and run the command:
 - Omit `--image-max-long-edge` if the user didn't specify a value.
 - Omit `--dpi` if the user didn't specify a value.
 - Omit `--per-page` if the user chose no.
-- Append any additional flags from question 6.
+- Append any additional flags from question 6 (even if empty).
+
+---
 
 ## Notes
 
