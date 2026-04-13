@@ -330,7 +330,7 @@ fi
 
 if [ "$INSTALL_DIR" != "$DEFAULT_INSTALL_DIR" ]; then
     echo ""
-    read -r -p "Save this directory to config for future runs? [Y/n] " REPLY
+    read -r -p "Save this directory to config for future runs ($CONFIG_FILE)? [Y/n] " REPLY
     REPLY="${REPLY:-Y}"
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         mkdir -p "$CONFIG_DIR"
