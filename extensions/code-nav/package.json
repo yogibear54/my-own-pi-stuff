@@ -1,0 +1,17 @@
+{
+  "name": "pi-extension-code-nav",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "dependencies": {
+    "web-tree-sitter": "^0.26.8",
+    "tree-sitter-javascript": "^0.25.0",
+    "tree-sitter-typescript": "^0.23.2",
+    "tree-sitter-python": "^0.25.0",
+    "tree-sitter-php": "^0.24.2",
+    "better-sqlite3": "^11.0.0"
+  }
+}
