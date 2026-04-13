@@ -17,7 +17,9 @@ import { type AssistantMessage, type Message, type ThinkingLevel as AiThinkingLe
 import {
 	Container,
 	Input,
+	Key,
 	Markdown,
+	matchesKey,
 	truncateToWidth,
 	visibleWidth,
 	type Focusable,
@@ -92,6 +94,7 @@ type OverlayRuntime = {
 	close?: () => void;
 	finish?: () => void;
 	setDraft?: (value: string) => void;
+	resetScroll?: () => void;
 	closed?: boolean;
 };
 
@@ -235,6 +238,7 @@ class BtwOverlay extends Container implements Focusable {
 	private readonly getStatus: () => string;
 	private readonly onSubmitCallback: (value: string) => void;
 	private readonly onDismissCallback: () => void;
+	private scrollOffset = 0;
 	private _focused = false;
 
 	get focused(): boolean {
@@ -279,6 +283,17 @@ class BtwOverlay extends Container implements Focusable {
 			return;
 		}
 
+		if (matchesKey(data, Key.ctrl("up")) || matchesKey(data, Key.pageUp)) {
+			this.scrollOffset++;
+			this.tui.requestRender();
+			return;
+		}
+		if (matchesKey(data, Key.ctrl("down")) || matchesKey(data, Key.pageDown)) {
+			this.scrollOffset = Math.max(0, this.scrollOffset - 1);
+			this.tui.requestRender();
+			return;
+		}
+
 		this.input.handleInput(data);
 	}
 
@@ -297,6 +312,10 @@ class BtwOverlay extends Container implements Focusable {
 		return `${this.theme.fg("borderMuted", "│")}${truncated}${" ".repeat(padding)}${this.theme.fg("borderMuted", "│")}`;
 	}
 
+	resetScroll(): void {
+		this.scrollOffset = 0;
+	}
+
 	private borderLine(innerWidth: number, edge: "top" | "bottom"): string {
 		const left = edge === "top" ? "┌" : "└";
 		const right = edge === "top" ? "┐" : "┘";
@@ -308,13 +327,19 @@ class BtwOverlay extends Container implements Focusable {
 		const innerWidth = Math.max(40, dialogWidth - 2);
 		const terminalRows = process.stdout.rows ?? 30;
 		const dialogHeight = Math.max(16, Math.min(30, Math.floor(terminalRows * 0.75)));
-		const chromeHeight = 7;
+		const chromeHeight = 9;
 		const transcriptHeight = Math.max(6, dialogHeight - chromeHeight);
 
 		// Markdown renders to innerWidth already — no manual wrapping needed
 		const transcript = this.getTranscript(innerWidth, this.theme);
-		const visibleTranscript = transcript.slice(-transcriptHeight);
+		const maxScroll = Math.max(0, transcript.length - transcriptHeight);
+		this.scrollOffset = Math.min(this.scrollOffset, maxScroll);
+		const endIdx = transcript.length - this.scrollOffset;
+		const startIdx = Math.max(0, endIdx - transcriptHeight);
+		const visibleTranscript = transcript.slice(startIdx, endIdx);
 		const transcriptPadding = Math.max(0, transcriptHeight - visibleTranscript.length);
+		const linesAbove = startIdx;
+		const linesBelow = transcript.length - endIdx;
 
 		const status = this.getStatus();
 
@@ -337,12 +362,20 @@ class BtwOverlay extends Container implements Focusable {
 			lines.push(this.frameLine("", innerWidth));
 		}
 
+		// Scroll indicators inside the transcript area
+		const scrollParts: string[] = [];
+		if (linesAbove > 0) scrollParts.push(`↑ ${linesAbove} line${linesAbove !== 1 ? "s" : ""} above`);
+		if (linesBelow > 0) scrollParts.push(`↓ ${linesBelow} line${linesBelow !== 1 ? "s" : ""} below`);
+		const scrollHint = scrollParts.length > 0
+			? this.theme.fg("dim", scrollParts.join(" · "))
+			: this.theme.fg("dim", "Ctrl↑↓ or PgUp/PgDn to scroll");
 		lines.push(this.theme.fg("borderMuted", `├${"─".repeat(innerWidth)}┤`));
+		lines.push(this.frameLine(scrollHint, innerWidth));
 		lines.push(this.frameLine(this.theme.fg("warning", status), innerWidth));
 		lines.push(
 			`${this.theme.fg("borderMuted", "│")}${inputLine}${this.theme.fg("borderMuted", "│")}`,
 		);
-		lines.push(this.frameLine(this.theme.fg("dim", "Enter submit · Esc close"), innerWidth));
+		lines.push(this.frameLine(this.theme.fg("dim", "Enter submit · Esc close · Ctrl↑↓ scroll"), innerWidth));
 		lines.push(this.borderLine(innerWidth, "bottom"));
 
 		return lines;
@@ -779,6 +812,7 @@ export default function (pi: ExtensionAPI) {
 						overlay.focused = runtime.handle?.isFocused() ?? false;
 						tui.requestRender();
 					};
+					runtime.resetScroll = () => overlay.resetScroll();
 					runtime.close = () => {
 						overlayDraft = overlay.getDraft();
 						closeRuntime();
@@ -926,6 +960,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		overlayRuntime?.resetScroll?.();
 		sideBusy = true;
 		pendingQuestion = question;
 		pendingAnswer = "";
