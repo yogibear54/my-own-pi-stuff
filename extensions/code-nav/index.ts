@@ -8,7 +8,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
 import { initParser } from "./src/languages/registry.js";
 import { Store } from "./src/store.js";
-import { fullIndex } from "./src/engine.js";
+import { fullIndex, indexFileContent } from "./src/engine.js";
 import { registerTools } from "./src/tools.js";
 
 export default function (pi: ExtensionAPI) {
@@ -25,6 +25,21 @@ export default function (pi: ExtensionAPI) {
 	// Register tools
 	registerTools(pi, getStore, getRoot);
 
+	/**
+	 * Build FTS content index for all tracked files.
+	 * Called asynchronously after symbol indexing.
+	 */
+	function buildFtsIndex(store: Store, root: string) {
+		const files = store.getAllFiles();
+		let ftsCount = 0;
+		for (const { path: relPath } of files) {
+			indexFileContent(relPath, root, store);
+			ftsCount++;
+		}
+		store.setMeta("ftsBuilt", "1");
+		console.log(`[code-nav] FTS content indexed: ${ftsCount} files`);
+	}
+
 	// Register /reindex command
 	pi.registerCommand("reindex", {
 		description: "Force a full re-index of the project for code navigation",
@@ -40,6 +55,12 @@ export default function (pi: ExtensionAPI) {
 
 			const result = fullIndex(ctx.cwd, store, ctx.cwd);
 			store.setMeta("rootPath", ctx.cwd);
+
+			// Re-build FTS in background
+			setTimeout(() => {
+				if (!store) return;
+				buildFtsIndex(store, ctx.cwd);
+			}, 0);
 
 			ctx.ui.notify(
 				`[code-nav] Re-indexed: ${result.indexed} files, ${store.getStats().symbolCount} symbols (${result.totalMs}ms)`,
@@ -79,6 +100,12 @@ export default function (pi: ExtensionAPI) {
 					`${store.getStats().symbolCount} symbols (${result.totalMs}ms)`,
 				);
 			}
+
+			// Background FTS content indexing
+			setTimeout(() => {
+				if (!store) return;
+				buildFtsIndex(store, ctx.cwd);
+			}, 0);
 		} else {
 			// Incremental update
 			const result = fullIndex(ctx.cwd, store, ctx.cwd);
@@ -94,6 +121,14 @@ export default function (pi: ExtensionAPI) {
 					"code-nav",
 					`${stats.symbolCount} symbols`,
 				);
+			}
+
+			// Background FTS content indexing if not yet built
+			if (!store.getMeta("ftsBuilt")) {
+				setTimeout(() => {
+					if (!store) return;
+					buildFtsIndex(store, ctx.cwd);
+				}, 0);
 			}
 		}
 	});

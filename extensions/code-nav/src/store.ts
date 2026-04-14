@@ -22,6 +22,33 @@ export interface SymbolRecord {
 	parentId: number | null;
 }
 
+/**
+ * Map a raw DB row (snake_case columns) to a SymbolRecord (camelCase).
+ * `SELECT *` returns snake_case keys from SQLite; this normalizes them.
+ */
+function toSymbolRecord(row: any): SymbolRecord {
+	return {
+		id: row.id,
+		file: row.file,
+		name: row.name,
+		kind: row.kind,
+		line: row.line,
+		column: row.column,
+		endLine: row.end_line,
+		endColumn: row.end_column,
+		signature: row.signature,
+		scope: row.scope,
+		visibility: row.visibility,
+		documentation: row.documentation,
+		parentId: row.parent_id,
+	};
+}
+
+/** Map an array of raw DB rows to SymbolRecord[]. */
+function toSymbolRecords(rows: any[]): SymbolRecord[] {
+	return rows.map(toSymbolRecord);
+}
+
 export interface FileRecord {
 	path: string;
 	language: string;
@@ -64,6 +91,22 @@ CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file);
 CREATE INDEX IF NOT EXISTS idx_symbols_scope ON symbols(scope);
 CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS content_fts USING fts5(
+  path,
+  content,
+  tokenize='unicode61'
+);
+
+CREATE TABLE IF NOT EXISTS content_lines (
+  path TEXT NOT NULL,
+  line_number INTEGER NOT NULL,
+  char_offset INTEGER NOT NULL,
+  line_text TEXT NOT NULL,
+  PRIMARY KEY (path, line_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_content_lines_path ON content_lines(path);
 `;
 
 export class Store {
@@ -75,6 +118,9 @@ export class Store {
 		deleteSymbolsByFile: Database.Statement;
 		findByName: Database.Statement;
 		findByNameAndFile: Database.Statement;
+		findByNameAndFileBest: Database.Statement;
+		findBestDefinition: Database.Statement;
+		findMembersOfScope: Database.Statement;
 		findByFile: Database.Statement;
 		findByKind: Database.Statement;
 		searchByName: Database.Statement;
@@ -84,6 +130,13 @@ export class Store {
 		setMeta: Database.Statement;
 		getMeta: Database.Statement;
 		countByName: Database.Statement;
+		insertFtsContent: Database.Statement;
+		deleteFtsByFile: Database.Statement;
+		insertContentLine: Database.Statement;
+		deleteContentLinesByFile: Database.Statement;
+		searchContent: Database.Statement;
+		getLineByOffset: Database.Statement;
+		getStaleFiles: Database.Statement;
 	};
 
 	constructor(dbPath: string) {
@@ -127,6 +180,54 @@ export class Store {
 
 			findByNameAndFile: this.db.prepare(
 				"SELECT * FROM symbols WHERE name = ? AND file = ?",
+			),
+
+			findByNameAndFileBest: this.db.prepare(
+				"SELECT * FROM symbols WHERE name = ? AND file = ? ORDER BY line LIMIT 1",
+			),
+
+			findBestDefinition: this.db.prepare(
+				"SELECT * FROM symbols WHERE name = ? ORDER BY kind, file, line LIMIT 1",
+			),
+
+			findMembersOfScope: this.db.prepare(
+				"SELECT * FROM symbols WHERE file = ? AND scope = ? ORDER BY line",
+			),
+
+			insertFtsContent: this.db.prepare(
+				"INSERT INTO content_fts (path, content) VALUES (?, ?)",
+			),
+
+			deleteFtsByFile: this.db.prepare(
+				"DELETE FROM content_fts WHERE path = ?",
+			),
+
+			insertContentLine: this.db.prepare(
+				"INSERT INTO content_lines (path, line_number, char_offset, line_text) VALUES (?, ?, ?, ?)",
+			),
+
+			deleteContentLinesByFile: this.db.prepare(
+				"DELETE FROM content_lines WHERE path = ?",
+			),
+
+			searchContent: this.db.prepare(`
+				SELECT path, content_fts.rank as rank
+				FROM content_fts
+				WHERE content_fts MATCH ?
+				ORDER BY rank
+				LIMIT ?
+			`),
+
+			getLineByOffset: this.db.prepare(`
+				SELECT line_number, line_text
+				FROM content_lines
+				WHERE path = ? AND char_offset <= ?
+				ORDER BY char_offset DESC
+				LIMIT 1
+			`),
+
+			getStaleFiles: this.db.prepare(
+				"SELECT f.path, f.hash FROM files f",
 			),
 
 			findByFile: this.db.prepare(
@@ -180,6 +281,8 @@ export class Store {
 
 	deleteFile(filePath: string) {
 		this.stmts.deleteSymbolsByFile.run(filePath);
+		this.stmts.deleteFtsByFile.run(filePath);
+		this.stmts.deleteContentLinesByFile.run(filePath);
 		this.stmts.deleteFile.run(filePath);
 	}
 
@@ -227,24 +330,24 @@ export class Store {
 	}
 
 	findDefinitions(name: string): SymbolRecord[] {
-		return this.stmts.findByName.all(name) as SymbolRecord[];
+		return toSymbolRecords(this.stmts.findByName.all(name));
 	}
 
 	findDefinitionsInFile(name: string, file: string): SymbolRecord[] {
-		return this.stmts.findByNameAndFile.all(name, file) as SymbolRecord[];
+		return toSymbolRecords(this.stmts.findByNameAndFile.all(name, file));
 	}
 
 	findSymbolsInFile(file: string): SymbolRecord[] {
-		return this.stmts.findByFile.all(file) as SymbolRecord[];
+		return toSymbolRecords(this.stmts.findByFile.all(file));
 	}
 
 	findByKind(kind: string, limit: number): SymbolRecord[] {
-		return this.stmts.findByKind.all(kind, limit) as SymbolRecord[];
+		return toSymbolRecords(this.stmts.findByKind.all(kind, limit));
 	}
 
 	searchSymbols(prefix: string, limit: number): SymbolRecord[] {
 		const escaped = prefix.replace(/[%_\\]/g, "\\$&");
-		return this.stmts.searchByName.all(`${escaped}%`, limit) as SymbolRecord[];
+		return toSymbolRecords(this.stmts.searchByName.all(`${escaped}%`, limit));
 	}
 
 	countDefinitions(name: string): number {
@@ -254,6 +357,88 @@ export class Store {
 
 	getStats(): { fileCount: number; symbolCount: number } {
 		return this.stmts.getStats.get() as { fileCount: number; symbolCount: number };
+	}
+
+	// ---- Context helpers ----
+
+	/**
+	 * Get the best-matching symbol definition for fetch_context.
+	 * Prefers same-file matches, then falls back to best match.
+	 */
+	getBestDefinition(name: string, contextFile?: string): SymbolRecord | undefined {
+		if (contextFile) {
+			const sameFile = toSymbolRecords(this.stmts.findByNameAndFileBest.all(name, contextFile));
+			if (sameFile.length > 0) return sameFile[0];
+		}
+		const rows = toSymbolRecords(this.stmts.findBestDefinition.all(name));
+		return rows[0];
+	}
+
+	/**
+	 * Find all members of a scope in a file (e.g., methods of a class).
+	 */
+	findMembersOfScope(file: string, scope: string): SymbolRecord[] {
+		return toSymbolRecords(this.stmts.findMembersOfScope.all(file, scope));
+	}
+
+	// ---- FTS operations ----
+
+	/**
+	 * Index file content into FTS5 with pre-processed (camelCase-split) text
+	 * and a line-map table for resolving offsets back to line numbers.
+	 */
+	indexFileContent(filePath: string, originalContent: string, processedContent: string) {
+		const tx = this.db.transaction(() => {
+			this.stmts.deleteFtsByFile.run(filePath);
+			this.stmts.deleteContentLinesByFile.run(filePath);
+
+			// Insert processed content into FTS
+			this.stmts.insertFtsContent.run(filePath, processedContent);
+
+			// Build line map from original content
+			const lines = originalContent.split("\n");
+			let offset = 0;
+			for (let i = 0; i < lines.length; i++) {
+				this.stmts.insertContentLine.run(filePath, i + 1, offset, lines[i]);
+				offset += lines[i].length + 1; // +1 for newline
+			}
+		});
+		tx();
+	}
+
+	/**
+	 * Search FTS5 content. Returns raw path + rank pairs.
+	 * The caller resolves offsets to lines and attaches symbol metadata.
+	 */
+	searchContentFts(query: string, limit: number): { path: string; rank: number }[] {
+		return this.stmts.searchContent.all(query, limit) as { path: string; rank: number }[];
+	}
+
+	/**
+	 * Resolve a character offset to a line number for a given file.
+	 */
+	getLineByOffset(filePath: string, charOffset: number): { line_number: number; line_text: string } | undefined {
+		return this.stmts.getLineByOffset.get(filePath, charOffset) as { line_number: number; line_text: string } | undefined;
+	}
+
+	/**
+	 * Get all tracked files with their hashes for staleness checking.
+	 */
+	getAllTrackedFiles(): { path: string; hash: string }[] {
+		return this.stmts.getStaleFiles.all() as { path: string; hash: string }[];
+	}
+
+	/**
+	 * Find which symbol (if any) encloses a given line in a file.
+	 */
+	findEnclosingSymbol(file: string, line: number): SymbolRecord | undefined {
+		const syms = this.findSymbolsInFile(file);
+		for (const sym of syms) {
+			if (line >= sym.line && line <= sym.endLine) {
+				return sym;
+			}
+		}
+		return undefined;
 	}
 
 	// ---- Meta ----
