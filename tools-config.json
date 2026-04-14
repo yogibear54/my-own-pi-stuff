@@ -1,0 +1,10 @@
+{
+	"enabledTools": [
+		"read",
+		"bash",
+		"edit",
+		"write",
+		"questionnaire",
+		"todo"
+	]
+}

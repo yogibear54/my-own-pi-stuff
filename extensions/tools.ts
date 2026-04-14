@@ -26,7 +26,7 @@ const CONFIG_PATH = join(CONFIG_DIR, "tools-config.json");
 
 // Get config path: project-level takes precedence over global
 export function getConfigPath(cwd: string = process.cwd()): string {
-	const projectPath = join(cwd, ".pi", "tools-config.json");
+	const projectPath = join(cwd, ".pi", "agent", "tools-config.json");
 	if (existsSync(projectPath)) {
 		return projectPath;
 	}
