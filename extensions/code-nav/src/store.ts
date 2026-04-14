@@ -135,8 +135,10 @@ export class Store {
 		insertContentLine: Database.Statement;
 		deleteContentLinesByFile: Database.Statement;
 		searchContent: Database.Statement;
+		searchContentCount: Database.Statement;
 		getLineByOffset: Database.Statement;
 		getStaleFiles: Database.Statement;
+		getAllFilesWithMeta: Database.Statement;
 	};
 
 	constructor(dbPath: string) {
@@ -218,6 +220,12 @@ export class Store {
 				LIMIT ?
 			`),
 
+			searchContentCount: this.db.prepare(`
+				SELECT COUNT(DISTINCT path) as count
+				FROM content_fts
+				WHERE content_fts MATCH ?
+			`),
+
 			getLineByOffset: this.db.prepare(`
 				SELECT line_number, line_text
 				FROM content_lines
@@ -228,6 +236,10 @@ export class Store {
 
 			getStaleFiles: this.db.prepare(
 				"SELECT f.path, f.hash FROM files f",
+			),
+
+			getAllFilesWithMeta: this.db.prepare(
+				"SELECT path, hash, last_indexed_at FROM files",
 			),
 
 			findByFile: this.db.prepare(
@@ -292,6 +304,10 @@ export class Store {
 
 	getAllFiles(): { path: string; hash: string }[] {
 		return this.stmts.getAllFiles.all() as { path: string; hash: string }[];
+	}
+
+	getAllFilesWithMeta(): { path: string; hash: string; lastIndexedAt: number }[] {
+		return this.stmts.getAllFilesWithMeta.all() as { path: string; hash: string; lastIndexedAt: number }[];
 	}
 
 	// ---- Symbol operations ----
@@ -412,6 +428,14 @@ export class Store {
 	 */
 	searchContentFts(query: string, limit: number): { path: string; rank: number }[] {
 		return this.stmts.searchContent.all(query, limit) as { path: string; rank: number }[];
+	}
+
+	/**
+	 * Count total files matching an FTS query (without fetching content).
+	 */
+	countContentFts(query: string): number {
+		const row = this.stmts.searchContentCount.get(query) as { count: number };
+		return row.count;
 	}
 
 	/**

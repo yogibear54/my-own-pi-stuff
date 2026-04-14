@@ -399,23 +399,27 @@ export function registerTools(
 
 			const root = getRoot();
 			const limit = params.limit ?? 30;
-			const results = await import("./engine.js").then((e) =>
+			const { results, totalMatches, totalFilesMatched, truncated } = await import("./engine.js").then((e) =>
 				e.searchCodebase(params.query, store, root, limit),
 			);
 
 			if (results.length === 0) {
+				const emptyQuery = !params.query || !params.query.trim();
 				return {
 					content: [
 						{
 							type: "text",
-							text: `No content matches for "${params.query}".`,
+							text: emptyQuery
+								? "Empty query. Provide a search term."
+							: `No content matches for "${params.query}".`,
 						},
 					],
 					details: {},
 				};
 			}
 
-			let text = `Found ${results.length} match(es) for "${params.query}":\n\n`;
+			const matchWord = totalMatches === 1 ? "match" : "matches";
+			let text = `Found ${results.length} of ${totalMatches} ${matchWord} in ${totalFilesMatched} file(s) for "${params.query}"${truncated ? " (truncated)" : ""}:\n\n`;
 
 			let lastFile = "";
 			for (const r of results) {
@@ -437,14 +441,23 @@ export function registerTools(
 				text += "\n★ = match in symbol name/signature (likely more relevant)\n";
 			}
 
+			if (truncated) {
+				text += `\n${totalMatches - results.length} more matches. Increase limit for full results.`;
+			}
+
 			return {
 				content: [{ type: "text", text }],
-				details: { results: results.map((r) => ({
-					file: r.file,
-					line: r.line,
-					enclosingSymbol: r.enclosingSymbol,
-					enclosingKind: r.enclosingKind,
-				})) },
+				details: {
+					results: results.map((r) => ({
+						file: r.file,
+						line: r.line,
+						enclosingSymbol: r.enclosingSymbol,
+						enclosingKind: r.enclosingKind,
+					})),
+					totalMatches,
+					totalFilesMatched,
+					truncated,
+				},
 			};
 		},
 	});

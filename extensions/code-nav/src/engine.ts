@@ -74,6 +74,15 @@ export interface ContentSearchResult {
 	enclosingKind: string | null;
 	inSymbolName: boolean;
 	rank: number;
+	/** Position-based rank: lower = earlier in file, used to break FTS ties */
+	linePos: number;
+}
+
+export interface SearchCodebaseResult {
+	results: ContentSearchResult[];
+	totalMatches: number;
+	totalFilesMatched: number;
+	truncated: boolean;
 }
 
 /**
@@ -448,8 +457,8 @@ function buildContainerResult(
 }
 
 /**
- * Build result with asymmetric padding around symbol definition.
- * Applies smart centering when symbol body exceeds available space.
+ * Build result with padding around symbol definition.
+ * Function body is always shown in full — maxLines limits padding only.
  */
 function buildPaddedResult(
 	sym: SymbolRecord,
@@ -459,28 +468,12 @@ function buildPaddedResult(
 	after: number,
 	maxLines: number,
 ): FetchContextResult {
-	const symBodyLines = sym.endLine - sym.line + 1;
-	const requestedTotal = before + symBodyLines + after;
+	// Always include the full function body (padding may be truncated)
+	const startLine = Math.max(1, sym.line - before);
+	const endLine = Math.min(totalLines, sym.endLine + after);
+	const shownLineCount = endLine - startLine + 1;
 
-	let startLine: number;
-	let endLine: number;
-
-	if (requestedTotal <= maxLines) {
-		// Fits within budget — use requested padding
-		startLine = Math.max(1, sym.line - before);
-		endLine = Math.min(totalLines, sym.endLine + after);
-	} else {
-		// Exceeds budget — smart centering around definition line
-		const halfBudget = Math.floor((maxLines - symBodyLines) / 2);
-		startLine = Math.max(1, sym.line - halfBudget);
-		endLine = startLine + maxLines - 1;
-		if (endLine > totalLines) {
-			endLine = totalLines;
-			startLine = Math.max(1, endLine - maxLines + 1);
-		}
-	}
-
-	const truncated = endLine - startLine + 1 < requestedTotal;
+	const truncated = shownLineCount > maxLines;
 
 	let content = `${sym.file}:${startLine}-${endLine}\n`;
 	content += "━".repeat(40) + "\n";
@@ -490,7 +483,8 @@ function buildPaddedResult(
 	}
 
 	if (truncated) {
-		content += `... (truncated: show full context via read tool with lines ${sym.line - before}-${sym.endLine + after})\n`;
+		const excess = shownLineCount - maxLines;
+		content += `\n... (${excess} lines exceed maxLines — use read tool for full context)\n`;
 	}
 
 	return {
@@ -545,16 +539,34 @@ export function indexFileContent(
 
 /**
  * Re-index FTS content for stale files. Returns count of re-indexed files.
+ * Uses file mtime as a fast filter to avoid reading unchanged files.
  */
 export function refreshStaleContent(
 	projectRoot: string,
 	store: Store,
 ): number {
-	const tracked = store.getAllTrackedFiles();
+	const tracked = store.getAllFilesWithMeta();
 	let refreshed = 0;
 
-	for (const { path: relPath, hash } of tracked) {
+	for (const { path: relPath, hash, lastIndexedAt } of tracked) {
 		const fullPath = path.resolve(projectRoot, relPath);
+
+		// Fast path: check file mtime before reading content
+		let fileMtime: number;
+		try {
+			const stat = fs.statSync(fullPath);
+			fileMtime = stat.mtimeMs;
+		} catch {
+			// File deleted or inaccessible — will be handled by full index
+			continue;
+		}
+
+		// Skip if file hasn't been modified since last indexing
+		if (fileMtime <= lastIndexedAt) {
+			continue;
+		}
+
+		// File is newer — read and hash to confirm it actually changed
 		let content: string;
 		try {
 			content = fs.readFileSync(fullPath, "utf8");
@@ -587,14 +599,28 @@ export function searchCodebase(
 	store: Store,
 	projectRoot: string,
 	limit: number = 30,
-): ContentSearchResult[] {
+): SearchCodebaseResult {
+	// Reject empty/whitespace-only queries
+	if (!query || !query.trim()) {
+		return { results: [], totalMatches: 0, totalFilesMatched: 0, truncated: false };
+	}
+
 	// First, refresh any stale content
 	refreshStaleContent(projectRoot, store);
 
 	const ftsQuery = escapeFtsQuery(query);
-	const rawResults = store.searchContentFts(ftsQuery, limit * 3); // Over-fetch for ranking
 
-	if (rawResults.length === 0) return [];
+	// Get total files that match (before limiting)
+	const totalFilesMatched = store.countContentFts(ftsQuery);
+
+	// Fetch many more files than needed to reduce chance of missing matches
+	// Use 50x to balance coverage vs. performance
+	const fetchLimit = Math.min(limit * 50, totalFilesMatched || 10000);
+	const rawResults = store.searchContentFts(ftsQuery, fetchLimit);
+
+	if (rawResults.length === 0) {
+		return { results: [], totalMatches: 0, totalFilesMatched, truncated: false };
+	}
 
 	// For each matching file, find all matching lines by grepping the original content
 	const results: ContentSearchResult[] = [];
@@ -653,11 +679,12 @@ export function searchCodebase(
 				enclosingKind,
 				inSymbolName,
 				rank,
+				linePos: i, // Position in file (lower = earlier)
 			});
 		}
 	}
 
-	// Sort: symbol name matches first (boosted), then by rank, then file/line
+	// Sort: symbol name matches first (boosted), then by FTS rank, then by line position
 	results.sort((a, b) => {
 		// Boost symbol name/signature matches
 		if (a.inSymbolName && !b.inSymbolName) return -1;
@@ -666,10 +693,20 @@ export function searchCodebase(
 		// Then by FTS rank (lower = more relevant)
 		if (a.rank !== b.rank) return a.rank - b.rank;
 
-		// Tiebreak: file path, then line
-		if (a.file !== b.file) return a.file.localeCompare(b.file);
-		return a.line - b.line;
+		// Within same file, prefer earlier matches
+		if (a.file === b.file) return a.linePos - b.linePos;
+
+		// Tiebreak: file path (alphabetical)
+		return a.file.localeCompare(b.file);
 	});
 
-	return results.slice(0, limit);
+	const totalMatches = results.length;
+	const truncated = totalFilesMatched > rawResults.length || totalMatches > limit;
+
+	return {
+		results: results.slice(0, limit),
+		totalMatches,
+		totalFilesMatched,
+		truncated,
+	};
 }
