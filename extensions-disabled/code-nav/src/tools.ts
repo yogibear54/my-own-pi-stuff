@@ -4,7 +4,35 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { Store } from "./store.js";
-import type { Engine } from "./engine.js";
+
+interface IndexingPolicyDetails {
+	includeHiddenPaths: boolean;
+	maxFileSizeBytes: number;
+	excludedDirectories: string[];
+}
+
+function getIndexingPolicy(store: Store): IndexingPolicyDetails | undefined {
+	const raw = store.getMeta("indexOptions");
+	if (!raw) return undefined;
+	try {
+		const parsed = JSON.parse(raw);
+		if (!parsed || typeof parsed !== "object") return undefined;
+		const includeHiddenPaths = !!parsed.includeHiddenPaths;
+		const rawSize = Number(parsed.maxFileSizeBytes);
+		const maxFileSizeBytes = Number.isFinite(rawSize) ? Math.max(10_000, Math.floor(rawSize)) : 1_000_000;
+		const excludedDirectories = Array.isArray(parsed.excludedDirectories)
+			? parsed.excludedDirectories.filter((d: unknown): d is string => typeof d === "string")
+			: [];
+		return { includeHiddenPaths, maxFileSizeBytes, excludedDirectories };
+	} catch {
+		return undefined;
+	}
+}
+
+function withIndexingPolicy<T extends Record<string, unknown>>(details: T, store: Store): T & { indexingPolicy?: IndexingPolicyDetails } {
+	const indexingPolicy = getIndexingPolicy(store);
+	return indexingPolicy ? { ...details, indexingPolicy } : details;
+}
 
 export function registerTools(
 	pi: ExtensionAPI,
@@ -19,11 +47,11 @@ export function registerTools(
 			"Find where a symbol (function, class, variable, type, method) is defined. " +
 			"Returns file path, line number, signature, and surrounding context. " +
 			"Use when you need to understand what a symbol IS or jump to its implementation. " +
-			"Resolves declarations (including across imports); not for listing a whole file's symbols or full-text search.",
+			"Uses name matching with context-file preference; not full import-graph resolution, and not for full-text search.",
 		promptSnippet: "Find symbol definitions (go-to-definition)",
 		promptGuidelines: [
 			"Use code_nav_definition for the declaration site of a known symbol name; use code_nav_search for arbitrary text in file bodies.",
-			"Provide the symbol name and optionally the current file path for import-aware resolution.",
+			"Provide the symbol name and optionally the current file path to prefer same-file matches when names are ambiguous.",
 		],
 		parameters: Type.Object({
 			symbol: Type.String({
@@ -32,11 +60,14 @@ export function registerTools(
 			file: Type.Optional(
 				Type.String({
 					description:
-						"Current file path (relative to project root) for import-aware resolution. Provide when available.",
+						"Current file path (relative to project root). Used to prefer same-file definitions when multiple matches exist.",
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			if (signal?.aborted) {
+				throw new Error("[code-nav] Operation cancelled.");
+			}
 			const store = getStore();
 			if (!store) {
 				throw new Error("[code-nav] Index not initialized. Try again in a moment.");
@@ -55,7 +86,7 @@ export function registerTools(
 							text: `No definitions found for "${params.symbol}". The symbol may not be indexed yet.`,
 						},
 					],
-					details: {},
+					details: withIndexingPolicy({}, store),
 				};
 			}
 
@@ -85,7 +116,7 @@ export function registerTools(
 
 			return {
 				content: [{ type: "text", text }],
-				details: { definitions: shown.map((r) => r.symbol) },
+				details: withIndexingPolicy({ definitions: shown.map((r) => r.symbol) }, store),
 			};
 		},
 	});
@@ -95,13 +126,13 @@ export function registerTools(
 		name: "code_nav_references",
 		label: "Find References",
 		description:
-			"Find all usages of a symbol across the codebase. " +
-			"Returns file paths, line numbers, and the source line for each reference. " +
-			"Use before refactoring to understand the full impact of changes. " +
-			"Distinct from go-to-definition: this lists call sites and reads, not only the declaration.",
+			"Find likely usages of a symbol across the codebase. " +
+			"Returns file paths, line numbers, and the source line for each match. " +
+			"Use before refactoring to estimate change impact. " +
+			"This is lexical identifier matching (not full semantic reference resolution).",
 		promptSnippet: "Find all references to a symbol across the codebase",
 		promptGuidelines: [
-			"Use code_nav_references for every usage of a symbol; use code_nav_definition when you only need where it is declared.",
+			"Use code_nav_references to find likely symbol usages; use code_nav_definition when you only need where it is declared.",
 			"Provide the definition file if known to improve accuracy (see code_nav_definition).",
 		],
 		parameters: Type.Object({
@@ -115,7 +146,10 @@ export function registerTools(
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			if (signal?.aborted) {
+				throw new Error("[code-nav] Operation cancelled.");
+			}
 			const store = getStore();
 			if (!store) {
 				throw new Error("[code-nav] Index not initialized. Try again in a moment.");
@@ -123,7 +157,7 @@ export function registerTools(
 
 			const root = getRoot();
 			const results = await import("./engine.js").then((e) =>
-				e.findReferences(params.symbol, params.definitionFile, store, root),
+				e.findReferences(params.symbol, params.definitionFile, store, root, signal),
 			);
 
 			if (results.length === 0) {
@@ -134,7 +168,7 @@ export function registerTools(
 							text: `No references found for "${params.symbol}".`,
 						},
 					],
-					details: {},
+					details: withIndexingPolicy({}, store),
 				};
 			}
 
@@ -172,7 +206,7 @@ export function registerTools(
 
 			return {
 				content: [{ type: "text", text }],
-				details: { references: results.slice(0, 100) },
+				details: withIndexingPolicy({ references: results.slice(0, 100) }, store),
 			};
 		},
 	});
@@ -203,7 +237,10 @@ export function registerTools(
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			if (signal?.aborted) {
+				throw new Error("[code-nav] Operation cancelled.");
+			}
 			const store = getStore();
 			if (!store) {
 				throw new Error("[code-nav] Index not initialized. Try again in a moment.");
@@ -223,7 +260,7 @@ export function registerTools(
 								text: `No symbols found in "${params.file}". The file may not be indexed.`,
 							},
 						],
-						details: {},
+						details: withIndexingPolicy({}, store),
 					};
 				}
 
@@ -240,7 +277,7 @@ export function registerTools(
 
 				return {
 					content: [{ type: "text", text }],
-					details: { symbols: results.map((r) => r.symbol) },
+					details: withIndexingPolicy({ symbols: results.map((r) => r.symbol) }, store),
 				};
 			} else if (params.query) {
 				// Workspace search
@@ -256,7 +293,7 @@ export function registerTools(
 								text: `No symbols matching "${params.query}".`,
 							},
 						],
-						details: {},
+						details: withIndexingPolicy({}, store),
 					};
 				}
 
@@ -269,7 +306,7 @@ export function registerTools(
 
 				return {
 					content: [{ type: "text", text }],
-					details: { symbols: results.map((r) => r.symbol) },
+					details: withIndexingPolicy({ symbols: results.map((r) => r.symbol) }, store),
 				};
 			} else {
 				// Stats
@@ -281,7 +318,7 @@ export function registerTools(
 							text: `Index stats: ${stats.symbolCount} symbols in ${stats.fileCount} files.\nProvide 'file' for an outline or 'query' to search symbols.`,
 						},
 					],
-					details: stats,
+					details: withIndexingPolicy(stats, store),
 				};
 			}
 		},
@@ -335,7 +372,10 @@ export function registerTools(
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+			if (signal?.aborted) {
+				throw new Error("[code-nav] Operation cancelled.");
+			}
 			const store = getStore();
 			if (!store) {
 				throw new Error("[code-nav] Index not initialized. Try again in a moment.");
@@ -353,13 +393,13 @@ export function registerTools(
 
 			return {
 				content: [{ type: "text", text: result.content }],
-				details: {
+				details: withIndexingPolicy({
 					file: result.file,
 					startLine: result.startLine,
 					endLine: result.endLine,
 					totalLines: result.totalLines,
 					truncated: result.truncated,
-				},
+				}, store),
 			};
 		},
 	});
@@ -377,7 +417,7 @@ export function registerTools(
 		promptSnippet: "Search codebase file contents for text",
 		promptGuidelines: [
 			"Use code_nav_search for text inside files (error messages, literals, comments, partial identifiers); use code_nav_definition for symbol declarations and code_nav_symbols for outlines or name-prefix symbol browse.",
-			"Use code_nav_references when you need every usage of a symbol, not a substring occurrence search.",
+			"Use code_nav_references when you need likely symbol usages, not substring occurrence search.",
 		],
 		parameters: Type.Object({
 			query: Type.String({
@@ -390,8 +430,40 @@ export function registerTools(
 					maximum: 100,
 				}),
 			),
+			scanMultiplier: Type.Optional(
+				Type.Number({
+					description:
+						"Candidate file fan-out multiplier before line filtering (default: 50, range: 1-200).",
+					minimum: 1,
+					maximum: 200,
+				}),
+			),
+			maxCandidateFiles: Type.Optional(
+				Type.Number({
+					description:
+						"Hard cap on candidate files fetched from FTS before line filtering (default: 10000).",
+					minimum: 100,
+					maximum: 100000,
+				}),
+			),
+			maxLinesScanned: Type.Optional(
+				Type.Number({
+					description:
+						"Optional line-scan budget across candidate files (default: unlimited). Lower values can speed up large repos but may truncate.",
+					minimum: 1000,
+					maximum: 10000000,
+				}),
+			),
+			includeStats: Type.Optional(
+				Type.Boolean({
+					description: "Include performance stats in the text output (stats are always in details).",
+				}),
+			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+			if (signal?.aborted) {
+				throw new Error("[code-nav] Operation cancelled.");
+			}
 			const store = getStore();
 			if (!store) {
 				throw new Error("[code-nav] Index not initialized. Try again in a moment.");
@@ -399,8 +471,13 @@ export function registerTools(
 
 			const root = getRoot();
 			const limit = params.limit ?? 30;
-			const { results, totalMatches, totalFilesMatched, truncated } = await import("./engine.js").then((e) =>
-				e.searchCodebase(params.query, store, root, limit),
+			const { results, totalMatches, totalFilesMatched, truncated, stats } = await import("./engine.js").then((e) =>
+				e.searchCodebase(params.query, store, root, limit, {
+					scanMultiplier: params.scanMultiplier,
+					maxCandidateFiles: params.maxCandidateFiles,
+					maxLinesScanned: params.maxLinesScanned,
+					signal,
+				}),
 			);
 
 			if (results.length === 0) {
@@ -414,7 +491,7 @@ export function registerTools(
 							: `No content matches for "${params.query}".`,
 						},
 					],
-					details: {},
+					details: withIndexingPolicy({ stats }, store),
 				};
 			}
 
@@ -442,12 +519,26 @@ export function registerTools(
 			}
 
 			if (truncated) {
-				text += `\n${totalMatches - results.length} more matches. Increase limit for full results.`;
+				text += `\n${Math.max(totalMatches - results.length, 0)} more matches. Increase limit for full results.`;
+			}
+
+			if (params.includeStats) {
+				const maxLinesLabel = stats.maxLinesScanned >= Number.MAX_SAFE_INTEGER
+					? "unlimited"
+					: String(stats.maxLinesScanned);
+				text += "\n\n── Search Stats ──\n";
+				text += `  refreshed files: ${stats.refreshedFiles}\n`;
+				text += `  candidate files: ${stats.candidateFiles} (fetchLimit=${stats.fetchLimit})\n`;
+				text += `  scanned files: ${stats.filesScanned}\n`;
+				text += `  scanned lines: ${stats.linesScanned}\n`;
+				text += `  config: scanMultiplier=${stats.scanMultiplier}, maxCandidateFiles=${stats.maxCandidateFiles}, maxLinesScanned=${maxLinesLabel}\n`;
+				text += `  line budget hit: ${stats.hitLineScanBudget ? "yes" : "no"}\n`;
+				text += `  elapsed: ${stats.totalMs}ms\n`;
 			}
 
 			return {
 				content: [{ type: "text", text }],
-				details: {
+				details: withIndexingPolicy({
 					results: results.map((r) => ({
 						file: r.file,
 						line: r.line,
@@ -457,7 +548,8 @@ export function registerTools(
 					totalMatches,
 					totalFilesMatched,
 					truncated,
-				},
+					stats,
+				}, store),
 			};
 		},
 	});

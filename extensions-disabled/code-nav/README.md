@@ -8,11 +8,12 @@ Gives the LLM (and you) **go-to-definition**, **find-references**, **symbol list
 
 ## Features
 
-- **Go to Definition** — find where a function, class, variable, or type is declared, with import-aware resolution across files.
-- **Find References** — locate every usage of a symbol across the entire codebase, grouped by file with confidence indicators.
+- **Go to Definition** — find where a function, class, variable, or type is declared, with same-file/context-aware ranking for ambiguous names.
+- **Find References** — locate likely usages of a symbol across the codebase via lexical identifier matching, grouped by file with confidence indicators.
 - **List Symbols** — outline view of a file's structure, or workspace-wide symbol search by name prefix.
 - **Fetch Context** — retrieve source code around a symbol definition with configurable padding; container types (classes, interfaces, enums) show a member summary instead of dumping the full body.
 - **Search Codebase** — full-text search across all indexed files using SQLite FTS5, with enclosing-symbol metadata and relevance ranking.
+- **Search Tuning + Stats** — optional search knobs for large codebases (`scanMultiplier`, candidate file cap, line-scan budget) with per-query performance stats in tool details.
 - **Persistent Index** — symbols are stored in a local SQLite database (`.pi/code-nav/index.db`); incremental re-indexing only processes changed files.
 - **`/reindex` Command** — force a full re-index from the Pi command line at any time.
 
@@ -67,11 +68,32 @@ To enable for **all** projects, add the same to your global settings at `~/.pi/a
 
 When disabled, the code-nav tools are deactivated and won't appear in the tool list. A notification is shown on session start with setup instructions.
 
+Optional indexing controls (project or global):
+
+```json
+{
+  "codeNav": {
+    "enabled": true,
+    "indexing": {
+      "includeHiddenPaths": true,
+      "maxFileSizeBytes": 1000000,
+      "excludedDirectories": ["node_modules", "vendor", "dist", "build", ".git", ".pi", "__pycache__"]
+    }
+  }
+}
+```
+
+- `includeHiddenPaths`: include dot-prefixed files/directories (default `true`)
+- `maxFileSizeBytes`: max file size parsed for symbols (default `1000000`)
+- `excludedDirectories`: directory names skipped during indexing
+
 ---
 
 ## Tools Provided
 
 The extension registers five tools available to the LLM:
+
+> Tool `details` include `indexingPolicy` (when available), so the LLM can see the active indexing configuration for this project.
 
 ### `code_nav_definition`
 
@@ -80,16 +102,16 @@ Find where a symbol is defined.
 | Parameter | Type     | Required | Description                                |
 |-----------|----------|----------|--------------------------------------------|
 | `symbol`  | `string` | Yes      | Symbol name to look up                     |
-| `file`    | `string` | No       | Current file path for import-aware ranking |
+| `file`    | `string` | No       | Current file path to prefer same-file matches when names are ambiguous |
 
 ### `code_nav_references`
 
-Find all usages of a symbol across the codebase.
+Find likely usages of a symbol across the codebase (lexical identifier matching).
 
 | Parameter        | Type     | Required | Description                       |
 |------------------|----------|----------|-----------------------------------|
 | `symbol`         | `string` | Yes      | Symbol name to find references for |
-| `definitionFile` | `string` | No       | File where the symbol is defined (improves accuracy) |
+| `definitionFile` | `string` | No       | File where the symbol is defined (improves ranking/definition marking) |
 
 ### `code_nav_symbols`
 
@@ -122,6 +144,12 @@ Search file contents for arbitrary text across the codebase.
 |-----------|----------|----------|----------------------------------------------|
 | `query`   | `string` | Yes      | Search terms (implicit AND, supports quoted phrases) |
 | `limit`   | `number` | No       | Max results (default 30, range 10–100)       |
+| `scanMultiplier` | `number` | No | Candidate file fan-out multiplier before line filtering (default 50) |
+| `maxCandidateFiles` | `number` | No | Hard cap on candidate files fetched from FTS (default 10000) |
+| `maxLinesScanned` | `number` | No | Optional line-scan budget across candidates (default unlimited) |
+| `includeStats` | `boolean` | No | Include search performance stats in the human-readable text output |
+
+Search performance stats are always returned in tool `details.stats` (even when `includeStats` is omitted).
 
 ---
 
@@ -133,7 +161,7 @@ Extension startup
   ├─ Load Tree-sitter WASM grammars for all supported languages
   ├─ Open/create SQLite index at .pi/code-nav/index.db
   └─ Walk project tree → parse files → extract & store symbols
-        (skips node_modules, vendor, dist, build, .git, __pycache__)
+        (skips excluded directories like node_modules, vendor, dist, build, .git, .pi, __pycache__)
 
 Subsequent sessions
   └─ Hash-compare tracked files → only re-index what changed
@@ -141,7 +169,7 @@ Subsequent sessions
 
 Symbol extraction uses [Tree-sitter queries](https://tree-sitter.github.io/tree-sitter/using-parsers/queries) — language-specific S-expression patterns that match declarations, class definitions, methods, etc. — to populate the SQLite index with names, kinds, locations, scopes, signatures, and visibility.
 
-Full-text search is powered by SQLite FTS5 with camelCase/PascalCase splitting, so sub-words in identifiers like `findDefinitions` become independently searchable (`find`, `Definitions`).
+Full-text search is powered by SQLite FTS5 with camelCase/PascalCase splitting while preserving original identifiers, so sub-words in identifiers like `findDefinitions` become searchable (`find`, `Definitions`) without losing exact `findDefinitions` matches.
 
 ---
 
@@ -162,9 +190,10 @@ src/
 
 ## Commands
 
-| Command    | Description                                        |
-|------------|----------------------------------------------------|
-| `/reindex` | Force a full re-index of the project               |
+| Command            | Description                                        |
+|--------------------|----------------------------------------------------|
+| `/reindex`         | Force a full re-index of the project               |
+| `/code-nav-config` | Show effective code-nav config and index status    |
 
 ---
 

@@ -22,7 +22,7 @@ export interface IndexResult {
 export function indexFile(
 	filePath: string,
 	relativePath: string,
-	maxFileSize: number = 100_000,
+	maxFileSize: number = 1_000_000,
 ): IndexResult | undefined {
 	const langDef = detectLanguage(filePath);
 	if (!langDef) return undefined;
@@ -86,11 +86,12 @@ function extractSymbols(
 
 				// Visibility
 				const visibility = extractVisibility(node, langDef);
+				const normalizedKind = normalizeKind(kind, node, langDef);
 
 				symbols.push({
 					file: filePath,
 					name,
-					kind: normalizeKind(kind),
+					kind: normalizedKind,
 					line: node.startPosition.row + 1,
 					column: node.startPosition.column,
 					endLine: node.endPosition.row + 1,
@@ -209,14 +210,45 @@ function extractVisibility(node: any, langDef: LanguageDef): string | null {
 /**
  * Normalize query kind to a clean symbol kind.
  */
-function normalizeKind(kind: string): string {
+function normalizeKind(kind: string, node: any, langDef: LanguageDef): string {
+	let normalized = kind;
+
 	// Strip decorators
-	if (kind.startsWith("decorated_")) return kind.slice("decorated_".length);
+	if (normalized.startsWith("decorated_")) {
+		normalized = normalized.slice("decorated_".length);
+	}
 	// Map arrow_function → function
-	if (kind === "arrow_function") return "function";
+	if (normalized === "arrow_function") {
+		normalized = "function";
+	}
 	// Map enum_member → constant
-	if (kind === "enum_member") return "constant";
-	return kind;
+	if (normalized === "enum_member") {
+		normalized = "constant";
+	}
+	// Classify const declarations as constants for TS/TSX/JS
+	if (normalized === "variable" && isConstDeclarator(node, langDef)) {
+		normalized = "constant";
+	}
+
+	return normalized;
+}
+
+function isConstDeclarator(node: any, langDef: LanguageDef): boolean {
+	if (
+		langDef.name !== "typescript" &&
+		langDef.name !== "tsx" &&
+		langDef.name !== "javascript"
+	) {
+		return false;
+	}
+
+	const parent = node?.parent;
+	if (!parent) return false;
+	if (parent.type !== "lexical_declaration" && parent.type !== "variable_declaration") {
+		return false;
+	}
+
+	return /^\s*const\b/.test(parent.text ?? "");
 }
 
 /**

@@ -5,18 +5,46 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Store, SymbolRecord } from "./store.js";
 import { indexFile, hashContent } from "./indexer.js";
-import { detectLanguage, getSupportedExtensions } from "./languages/registry.js";
+import { getSupportedExtensions } from "./languages/registry.js";
 
 /** Regex: split camelCase and PascalCase at word boundaries. */
 const CAMEL_SPLIT_RE = /([a-z])([A-Z])/g;
 
 /**
- * Pre-process source content for FTS5: split camelCase/PascalCase identifiers
- * so that sub-words become independently searchable.
- * snake_case and kebab-case are already split by the unicode61 tokenizer.
+ * Pre-process source content for FTS5.
+ *
+ * We index both the original text and a camelCase/PascalCase-split variant.
+ * This preserves exact identifier matches (e.g. myFunction) while still
+ * enabling sub-word search (my, Function).
  */
 export function preprocessForFts(content: string): string {
-	return content.replace(CAMEL_SPLIT_RE, "$1 $2");
+	const split = content.replace(CAMEL_SPLIT_RE, "$1 $2");
+	if (split === content) return content;
+	return `${content}\n${split}`;
+}
+
+/** Parsed query token used by both FTS query building and line filtering. */
+interface QueryToken {
+	value: string;
+	quoted: boolean;
+}
+
+/**
+ * Split a query into tokens while preserving quoted phrases.
+ * Example: foo "bar baz" -> [foo, bar baz]
+ */
+function tokenizeQuery(query: string): QueryToken[] {
+	const tokens: QueryToken[] = [];
+	const re = /"([^"]+)"|(\S+)/g;
+	let match: RegExpExecArray | null;
+
+	while ((match = re.exec(query)) !== null) {
+		const raw = (match[1] ?? match[2] ?? "").trim();
+		if (!raw) continue;
+		tokens.push({ value: raw.replace(/"/g, ""), quoted: !!match[1] });
+	}
+
+	return tokens;
 }
 
 /**
@@ -24,17 +52,14 @@ export function preprocessForFts(content: string): string {
  * special characters. Supports simple word queries and quoted phrases.
  */
 export function escapeFtsQuery(query: string): string {
-	// Already quoted — pass through
-	if (/^".+"$/.test(query)) return query;
+	const tokens = tokenizeQuery(query);
+	if (tokens.length === 0) return "";
 
-	// Split into tokens, escape each, rejoin as implicit AND
-	const tokens = query.trim().split(/\s+/).filter(Boolean);
-	return tokens.map((t) => {
-		// If token contains FTS-special chars, quote it
-		if (/["'*:^(){}|\[\]]/.test(t)) {
-			return `"${t.replace(/"/g, "")}"`;
+	return tokens.map(({ value, quoted }) => {
+		if (quoted || /["'*:^(){}|\[\]]/.test(value)) {
+			return `"${value}"`;
 		}
-		return t;
+		return value;
 	}).join(" ");
 }
 
@@ -78,34 +103,83 @@ export interface ContentSearchResult {
 	linePos: number;
 }
 
+export interface SearchCodebaseStats {
+	refreshedFiles: number;
+	fetchLimit: number;
+	candidateFiles: number;
+	filesScanned: number;
+	linesScanned: number;
+	scanMultiplier: number;
+	maxCandidateFiles: number;
+	maxLinesScanned: number;
+	hitLineScanBudget: boolean;
+	totalMs: number;
+}
+
 export interface SearchCodebaseResult {
 	results: ContentSearchResult[];
 	totalMatches: number;
 	totalFilesMatched: number;
 	truncated: boolean;
+	stats: SearchCodebaseStats;
 }
+
+export interface SearchCodebaseOptions {
+	/** Multiplier for candidate file fan-out before line-level filtering (default: 50). */
+	scanMultiplier?: number;
+	/** Hard cap of candidate files fetched from FTS before line filtering (default: 10000). */
+	maxCandidateFiles?: number;
+	/** Optional line-scan budget across all candidate files (default: unlimited). */
+	maxLinesScanned?: number;
+	/** Optional cancellation signal for long-running searches. */
+	signal?: { aborted?: boolean };
+}
+
+export interface FullIndexOptions {
+	/** Include hidden files/directories (dot-prefixed). Default: true. */
+	includeHiddenPaths?: boolean;
+	/** Directory names to skip while walking. */
+	excludedDirectories?: string[];
+	/** Maximum source file size to parse in bytes. Default: 1_000_000 (1MB). */
+	maxFileSizeBytes?: number;
+}
+
+const DEFAULT_EXCLUDED_DIRS = [
+	"node_modules",
+	"vendor",
+	"dist",
+	"build",
+	".git",
+	".pi",
+	"__pycache__",
+];
 
 /**
  * Walk the project directory and index all supported files.
- * Returns { indexed, skipped, totalMs }.
+ * Returns { indexed, skipped, removed, totalMs }.
  */
 export function fullIndex(
 	projectRoot: string,
 	store: Store,
 	relativeTo: string,
+	options: FullIndexOptions = {},
 ): { indexed: number; skipped: number; removed: number; totalMs: number } {
 	const start = Date.now();
 	const extensions = new Set(getSupportedExtensions());
+	const includeHiddenPaths = options.includeHiddenPaths ?? true;
+	const excludedDirectories = new Set(options.excludedDirectories ?? DEFAULT_EXCLUDED_DIRS);
+	const maxFileSizeBytes = Math.max(10_000, Math.floor(options.maxFileSizeBytes ?? 1_000_000));
 
 	// Collect all existing indexed files for removal detection
-	const existingFiles = new Map<string, string>();
-	for (const row of store.getAllFiles()) {
-		existingFiles.set(row.path, row.hash);
+	const existingFiles = new Map<string, { hash: string; lastIndexedAt: number }>();
+	for (const row of store.getAllFilesWithMeta()) {
+		existingFiles.set(row.path, { hash: row.hash, lastIndexedAt: row.lastIndexedAt });
 	}
 
 	const indexedFiles = new Set<string>();
 	let indexed = 0;
 	let skipped = 0;
+	let removed = 0;
 
 	// Walk directory
 	function walk(dir: string) {
@@ -117,18 +191,9 @@ export function fullIndex(
 		}
 
 		for (const entry of entries) {
-			// Skip hidden, node_modules, vendor, etc.
-			if (entry.name.startsWith(".")) continue;
-			if (
-				entry.name === "node_modules" ||
-				entry.name === "vendor" ||
-				entry.name === "vendor" ||
-				entry.name === "dist" ||
-				entry.name === "build" ||
-				entry.name === ".git" ||
-				entry.name === "__pycache__"
-			)
-				continue;
+			const isHidden = entry.name.startsWith(".");
+			if (isHidden && !includeHiddenPaths) continue;
+			if (entry.isDirectory() && excludedDirectories.has(entry.name)) continue;
 
 			const fullPath = path.join(dir, entry.name);
 
@@ -145,10 +210,15 @@ export function fullIndex(
 				let needsIndex = true;
 				if (existing) {
 					try {
-						const content = fs.readFileSync(fullPath, "utf8");
-						const hash = hashContent(content);
-						if (hash === existing) {
+						const stat = fs.statSync(fullPath);
+						if (stat.mtimeMs <= existing.lastIndexedAt) {
 							needsIndex = false;
+						} else {
+							const content = fs.readFileSync(fullPath, "utf8");
+							const hash = hashContent(content);
+							if (hash === existing.hash) {
+								needsIndex = false;
+							}
 						}
 					} catch {
 						needsIndex = false;
@@ -156,13 +226,23 @@ export function fullIndex(
 				}
 
 				if (needsIndex) {
-					const result = indexFile(fullPath, relativePath);
+					const result = indexFile(fullPath, relativePath, maxFileSizeBytes);
 					if (result) {
 						store.indexFile(relativePath, result.language, result.hash, result.symbols);
+						indexFileContent(relativePath, projectRoot, store);
 						indexed++;
 					} else {
 						skipped++;
+						if (existing) {
+							// File exists but is no longer indexable (parse/read/size failure).
+							// Remove old rows so we don't serve stale symbols/content.
+							store.deleteFile(relativePath);
+							removed++;
+						}
 					}
+				} else if (!store.hasIndexedContent(relativePath)) {
+					// Backfill missing content rows for previously indexed files.
+					indexFileContent(relativePath, projectRoot, store);
 				}
 
 				indexedFiles.add(relativePath);
@@ -173,7 +253,6 @@ export function fullIndex(
 	walk(projectRoot);
 
 	// Remove files that no longer exist
-	let removed = 0;
 	for (const [filePath] of existingFiles) {
 		if (!indexedFiles.has(filePath)) {
 			store.deleteFile(filePath);
@@ -192,11 +271,14 @@ export function reindexFile(
 	projectRoot: string,
 	store: Store,
 	relativeTo: string,
+	options: Pick<FullIndexOptions, "maxFileSizeBytes"> = {},
 ): boolean {
 	const relativePath = path.relative(relativeTo, absolutePath);
-	const result = indexFile(absolutePath, relativePath);
+	const maxFileSizeBytes = Math.max(10_000, Math.floor(options.maxFileSizeBytes ?? 1_000_000));
+	const result = indexFile(absolutePath, relativePath, maxFileSizeBytes);
 	if (result) {
 		store.indexFile(relativePath, result.language, result.hash, result.symbols);
+		indexFileContent(relativePath, projectRoot, store);
 		return true;
 	}
 	return false;
@@ -248,57 +330,58 @@ export function findDefinitions(
 }
 
 /**
- * Find references to a symbol by searching for its name across indexed files
- * and verifying with import analysis.
+ * Find likely references to a symbol by lexical identifier matching across
+ * indexed files. This is not full semantic reference resolution.
  */
 export function findReferences(
 	name: string,
 	definitionFile: string | undefined,
 	store: Store,
 	projectRoot: string,
+	signal?: { aborted?: boolean },
 ): ReferenceResult[] {
 	const results: ReferenceResult[] = [];
+	const symbolRegex = new RegExp(`\\b${escapeRegex(name)}\\b`);
 
-	// Get all files that might reference this symbol
-	const files = new Set<string>();
-
-	// Add the definition file
-	if (definitionFile) files.add(definitionFile);
+	const definitionLines = new Set<number>();
+	if (definitionFile) {
+		for (const sym of store.findDefinitionsInFile(name, definitionFile)) {
+			definitionLines.add(sym.line);
+		}
+	}
 
 	// We need to grep for the name in all indexed files
 	// For now, use a pragmatic approach: search file contents for the identifier
 	const allIndexedFiles = store.getAllFiles();
 
 	for (const { path: relPath } of allIndexedFiles) {
+		throwIfCancelled(signal);
 		const fullPath = path.resolve(projectRoot, relPath);
 		try {
 			const content = fs.readFileSync(fullPath, "utf8");
+			if (!content.includes(name)) continue;
 			const lines = content.split("\n");
+			const isDefinitionFile = !!definitionFile && relPath === definitionFile;
 
 			for (let i = 0; i < lines.length; i++) {
+				if ((i & 255) === 0) throwIfCancelled(signal);
 				const line = lines[i];
-				// Simple word-boundary check for the name
-				const regex = new RegExp(`\\b${escapeRegex(name)}\\b`);
-				if (regex.test(line)) {
-					const col = line.indexOf(name);
-					if (col === -1) continue;
+				if (!line.includes(name)) continue;
+				if (!symbolRegex.test(line)) continue;
 
-					const isDef =
-						definitionFile &&
-						relPath === definitionFile &&
-						store.findDefinitionsInFile(name, relPath).some(
-							(s) => s.line === i + 1,
-						);
+				const col = line.indexOf(name);
+				if (col === -1) continue;
+				const lineNum = i + 1;
+				const isDef = isDefinitionFile && definitionLines.has(lineNum);
 
-					results.push({
-						file: relPath,
-						line: i + 1,
-						column: col,
-						lineText: line.trim(),
-						isDefinition: !!isDef,
-						confidence: isDef ? "high" : relPath === definitionFile ? "high" : "medium",
-					});
-				}
+				results.push({
+					file: relPath,
+					line: lineNum,
+					column: col,
+					lineText: line.trim(),
+					isDefinition: isDef,
+					confidence: isDef ? "high" : relPath === definitionFile ? "high" : "medium",
+				});
 			}
 		} catch {
 			// Skip unreadable files
@@ -518,6 +601,12 @@ function escapeRegex(str: string): string {
 	return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function throwIfCancelled(signal?: { aborted?: boolean }) {
+	if (signal?.aborted) {
+		throw new Error("[code-nav] Operation cancelled.");
+	}
+}
+
 /**
  * Index file content into FTS5. Called after symbol indexing.
  */
@@ -544,12 +633,15 @@ export function indexFileContent(
 export function refreshStaleContent(
 	projectRoot: string,
 	store: Store,
+	signal?: { aborted?: boolean },
 ): number {
 	const tracked = store.getAllFilesWithMeta();
 	let refreshed = 0;
 
 	for (const { path: relPath, hash, lastIndexedAt } of tracked) {
+		throwIfCancelled(signal);
 		const fullPath = path.resolve(projectRoot, relPath);
+		const needsBackfill = !store.hasIndexedContent(relPath);
 
 		// Fast path: check file mtime before reading content
 		let fileMtime: number;
@@ -561,12 +653,11 @@ export function refreshStaleContent(
 			continue;
 		}
 
-		// Skip if file hasn't been modified since last indexing
-		if (fileMtime <= lastIndexedAt) {
+		// Skip unchanged files unless they are missing FTS content rows
+		if (!needsBackfill && fileMtime <= lastIndexedAt) {
 			continue;
 		}
 
-		// File is newer — read and hash to confirm it actually changed
 		let content: string;
 		try {
 			content = fs.readFileSync(fullPath, "utf8");
@@ -583,7 +674,17 @@ export function refreshStaleContent(
 				const processed = preprocessForFts(content);
 				store.indexFileContent(relPath, content, processed);
 				refreshed++;
+			} else {
+				// Avoid stale definitions/content if file can no longer be indexed.
+				store.deleteFile(relPath);
 			}
+			continue;
+		}
+
+		if (needsBackfill) {
+			const processed = preprocessForFts(content);
+			store.indexFileContent(relPath, content, processed);
+			refreshed++;
 		}
 	}
 
@@ -599,57 +700,166 @@ export function searchCodebase(
 	store: Store,
 	projectRoot: string,
 	limit: number = 30,
+	options: SearchCodebaseOptions = {},
 ): SearchCodebaseResult {
+	const startedAt = Date.now();
+	const scanMultiplier = Math.max(1, Math.min(200, Math.floor(options.scanMultiplier ?? 50)));
+	const maxCandidateFiles = Math.max(100, Math.min(100_000, Math.floor(options.maxCandidateFiles ?? 10_000)));
+	const maxLinesScanned = Math.max(1, Math.floor(options.maxLinesScanned ?? Number.MAX_SAFE_INTEGER));
+	const safeLimit = Math.max(1, limit);
+
+	function makeStats(overrides: Partial<SearchCodebaseStats> = {}): SearchCodebaseStats {
+		return {
+			refreshedFiles: 0,
+			fetchLimit: 0,
+			candidateFiles: 0,
+			filesScanned: 0,
+			linesScanned: 0,
+			scanMultiplier,
+			maxCandidateFiles,
+			maxLinesScanned,
+			hitLineScanBudget: false,
+			totalMs: Date.now() - startedAt,
+			...overrides,
+		};
+	}
+
 	// Reject empty/whitespace-only queries
 	if (!query || !query.trim()) {
-		return { results: [], totalMatches: 0, totalFilesMatched: 0, truncated: false };
+		return {
+			results: [],
+			totalMatches: 0,
+			totalFilesMatched: 0,
+			truncated: false,
+			stats: makeStats(),
+		};
 	}
 
 	// First, refresh any stale content
-	refreshStaleContent(projectRoot, store);
+	const refreshedFiles = refreshStaleContent(projectRoot, store, options.signal);
 
 	const ftsQuery = escapeFtsQuery(query);
+	if (!ftsQuery) {
+		return {
+			results: [],
+			totalMatches: 0,
+			totalFilesMatched: 0,
+			truncated: false,
+			stats: makeStats({ refreshedFiles }),
+		};
+	}
 
 	// Get total files that match (before limiting)
 	const totalFilesMatched = store.countContentFts(ftsQuery);
 
-	// Fetch many more files than needed to reduce chance of missing matches
-	// Use 50x to balance coverage vs. performance
-	const fetchLimit = Math.min(limit * 50, totalFilesMatched || 10000);
+	// Fetch many more files than needed to reduce chance of missing matches.
+	const fetchLimit = Math.min(safeLimit * scanMultiplier, totalFilesMatched || maxCandidateFiles, maxCandidateFiles);
 	const rawResults = store.searchContentFts(ftsQuery, fetchLimit);
 
 	if (rawResults.length === 0) {
-		return { results: [], totalMatches: 0, totalFilesMatched, truncated: false };
+		return {
+			results: [],
+			totalMatches: 0,
+			totalFilesMatched,
+			truncated: false,
+			stats: makeStats({
+				refreshedFiles,
+				fetchLimit,
+				candidateFiles: 0,
+			}),
+		};
 	}
 
-	// For each matching file, find all matching lines by grepping the original content
+	// For each matching file, find all matching lines.
 	const results: ContentSearchResult[] = [];
-	const queryTerms = query.trim().toLowerCase().split(/\s+/);
+	const queryTerms = tokenizeQuery(query).map((t) => t.value.toLowerCase());
+	if (queryTerms.length === 0) {
+		return {
+			results: [],
+			totalMatches: 0,
+			totalFilesMatched,
+			truncated: false,
+			stats: makeStats({
+				refreshedFiles,
+				fetchLimit,
+				candidateFiles: rawResults.length,
+			}),
+		};
+	}
+
+	let filesScanned = 0;
+	let linesScanned = 0;
+	let hitLineScanBudget = false;
 
 	for (const { path: relPath, rank } of rawResults) {
-		const fullPath = path.resolve(projectRoot, relPath);
-		let lines: string[];
-		try {
-			lines = fs.readFileSync(fullPath, "utf8").split("\n");
-		} catch {
-			continue;
+		throwIfCancelled(options.signal);
+		if (linesScanned >= maxLinesScanned) {
+			hitLineScanBudget = true;
+			break;
 		}
 
-		// Get symbols in this file for metadata
-		const fileSymbols = store.findSymbolsInFile(relPath);
+		let indexedLines = store.getContentLines(relPath);
+		if (indexedLines.length === 0) {
+			const fullPath = path.resolve(projectRoot, relPath);
+			try {
+				const fallback = fs.readFileSync(fullPath, "utf8").split("\n");
+				indexedLines = fallback.map((line_text: string, i: number) => ({
+					line_number: i + 1,
+					line_text,
+				}));
+			} catch {
+				continue;
+			}
+		}
+		filesScanned++;
 
-		for (let i = 0; i < lines.length; i++) {
-			const lineLower = lines[i].toLowerCase();
-			// Check if all query terms appear in this line
+		// Get symbols in this file for metadata
+		const fileSymbols = store.findSymbolsInFile(relPath).sort((a, b) =>
+			a.line - b.line || b.endLine - a.endLine,
+		);
+
+		const symbolNameLines = new Set<number>();
+		for (const sym of fileSymbols) {
+			symbolNameLines.add(sym.line);
+			if (sym.signature) {
+				for (let sigLine = sym.line; sigLine <= Math.min(sym.line + 2, sym.endLine); sigLine++) {
+					symbolNameLines.add(sigLine);
+				}
+			}
+		}
+
+		const activeSymbols: SymbolRecord[] = [];
+		let nextSymbol = 0;
+
+		for (const row of indexedLines) {
+			if ((linesScanned & 255) === 0) throwIfCancelled(options.signal);
+			if (linesScanned >= maxLinesScanned) {
+				hitLineScanBudget = true;
+				break;
+			}
+			linesScanned++;
+
+			const lineNum = row.line_number;
+			const lineText = row.line_text;
+			const lineLower = lineText.toLowerCase();
 			const allMatch = queryTerms.every((term) => lineLower.includes(term));
 			if (!allMatch) continue;
 
-			const lineNum = i + 1;
+			while (nextSymbol < fileSymbols.length && fileSymbols[nextSymbol].line <= lineNum) {
+				activeSymbols.push(fileSymbols[nextSymbol]);
+				nextSymbol++;
+			}
 
-			// Find enclosing symbol
+			for (let i = activeSymbols.length - 1; i >= 0; i--) {
+				if (activeSymbols[i].endLine < lineNum) {
+					activeSymbols.splice(i, 1);
+				}
+			}
+
 			let enclosingSymbol: string | null = null;
 			let enclosingKind: string | null = null;
-			for (const sym of fileSymbols) {
+			for (let i = activeSymbols.length - 1; i >= 0; i--) {
+				const sym = activeSymbols[i];
 				if (lineNum >= sym.line && lineNum <= sym.endLine) {
 					enclosingSymbol = sym.name;
 					enclosingKind = sym.kind;
@@ -657,29 +867,15 @@ export function searchCodebase(
 				}
 			}
 
-			// Check if match is in a symbol name or signature
-			let inSymbolName = false;
-			for (const sym of fileSymbols) {
-				if (lineNum === sym.line) {
-					inSymbolName = true;
-					break;
-				}
-				if (sym.signature && lineNum >= sym.line && lineNum <= sym.line + 2) {
-					// Signature spans first few lines of definition
-					inSymbolName = true;
-					break;
-				}
-			}
-
 			results.push({
 				file: relPath,
 				line: lineNum,
-				lineText: lines[i].trim(),
+				lineText: lineText.trim(),
 				enclosingSymbol,
 				enclosingKind,
-				inSymbolName,
+				inSymbolName: symbolNameLines.has(lineNum),
 				rank,
-				linePos: i, // Position in file (lower = earlier)
+				linePos: lineNum - 1,
 			});
 		}
 	}
@@ -701,12 +897,20 @@ export function searchCodebase(
 	});
 
 	const totalMatches = results.length;
-	const truncated = totalFilesMatched > rawResults.length || totalMatches > limit;
+	const truncated = totalFilesMatched > rawResults.length || totalMatches > safeLimit || hitLineScanBudget;
 
 	return {
-		results: results.slice(0, limit),
+		results: results.slice(0, safeLimit),
 		totalMatches,
 		totalFilesMatched,
 		truncated,
+		stats: makeStats({
+			refreshedFiles,
+			fetchLimit,
+			candidateFiles: rawResults.length,
+			filesScanned,
+			linesScanned,
+			hitLineScanBudget,
+		}),
 	};
 }

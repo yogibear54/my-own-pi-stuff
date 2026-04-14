@@ -136,6 +136,8 @@ export class Store {
 		deleteContentLinesByFile: Database.Statement;
 		searchContent: Database.Statement;
 		searchContentCount: Database.Statement;
+		hasFtsByFile: Database.Statement;
+		getContentLinesByFile: Database.Statement;
 		getLineByOffset: Database.Statement;
 		getStaleFiles: Database.Statement;
 		getAllFilesWithMeta: Database.Statement;
@@ -226,6 +228,17 @@ export class Store {
 				WHERE content_fts MATCH ?
 			`),
 
+			hasFtsByFile: this.db.prepare(
+				"SELECT 1 FROM content_fts WHERE path = ? LIMIT 1",
+			),
+
+			getContentLinesByFile: this.db.prepare(`
+				SELECT line_number, line_text
+				FROM content_lines
+				WHERE path = ?
+				ORDER BY line_number
+			`),
+
 			getLineByOffset: this.db.prepare(`
 				SELECT line_number, line_text
 				FROM content_lines
@@ -239,7 +252,7 @@ export class Store {
 			),
 
 			getAllFilesWithMeta: this.db.prepare(
-				"SELECT path, hash, last_indexed_at FROM files",
+				"SELECT path, hash, last_indexed_at as lastIndexedAt FROM files",
 			),
 
 			findByFile: this.db.prepare(
@@ -296,6 +309,13 @@ export class Store {
 		this.stmts.deleteFtsByFile.run(filePath);
 		this.stmts.deleteContentLinesByFile.run(filePath);
 		this.stmts.deleteFile.run(filePath);
+	}
+
+	/**
+	 * Clear all indexed data (symbols, files, content, meta).
+	 */
+	clearAll() {
+		this.db.exec("DELETE FROM symbols; DELETE FROM files; DELETE FROM content_fts; DELETE FROM content_lines; DELETE FROM meta;");
 	}
 
 	getFile(filePath: string): FileRecord | undefined {
@@ -436,6 +456,20 @@ export class Store {
 	countContentFts(query: string): number {
 		const row = this.stmts.searchContentCount.get(query) as { count: number };
 		return row.count;
+	}
+
+	/**
+	 * Check whether this file currently has an FTS row.
+	 */
+	hasIndexedContent(filePath: string): boolean {
+		return !!this.stmts.hasFtsByFile.get(filePath);
+	}
+
+	/**
+	 * Get indexed content lines for a file.
+	 */
+	getContentLines(filePath: string): { line_number: number; line_text: string }[] {
+		return this.stmts.getContentLinesByFile.all(filePath) as { line_number: number; line_text: string }[];
 	}
 
 	/**

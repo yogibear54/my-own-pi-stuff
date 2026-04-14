@@ -3,7 +3,7 @@
  * and provide symbol extraction queries per language.
  */
 import path from "node:path";
-import type { Language, Parser as WasmParser } from "web-tree-sitter";
+import type { Language, Parser as WasmParser, Query } from "web-tree-sitter";
 
 export interface LanguageDef {
 	/** Human-readable language name */
@@ -38,7 +38,6 @@ const LANGUAGES: LanguageDef[] = [
 			type: "(type_alias_declaration name: (type_identifier) @name) @node",
 			method: "(method_definition name: (property_identifier) @name) @node",
 			variable: "(variable_declarator name: (identifier) @name) @node",
-			constant: "(variable_declarator name: (identifier) @name value: (_) @val) @node",
 			enum: "(enum_declaration name: (identifier) @name) @node",
 			enum_member: "(enum_assignment name: (property_identifier) @name) @node",
 		},
@@ -190,6 +189,6 @@ export function getParser(): WasmParser {
 /** Get a loaded language + its compiled queries */
 export function getLoadedLanguage(
 	langDef: LanguageDef,
-): { lang: Language; queries: Map<string, any> } | undefined {
+): { lang: Language; queries: Map<string, Query> } | undefined {
 	return languageCache.get(langDef.name);
 }

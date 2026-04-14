@@ -11,6 +11,7 @@ import path from "node:path";
 import { initParser } from "./src/languages/registry.js";
 import { Store } from "./src/store.js";
 import { fullIndex, indexFileContent } from "./src/engine.js";
+import type { FullIndexOptions } from "./src/engine.js";
 import { registerTools } from "./src/tools.js";
 
 /** Code-nav tool names (used to enable/disable as a group). */
@@ -21,6 +22,12 @@ const CODE_NAV_TOOLS = [
 	"code_nav_fetch_context",
 	"code_nav_search",
 ];
+
+const DEFAULT_INDEX_OPTIONS: Required<FullIndexOptions> = {
+	includeHiddenPaths: true,
+	excludedDirectories: ["node_modules", "vendor", "dist", "build", ".git", ".pi", "__pycache__"],
+	maxFileSizeBytes: 1_000_000,
+};
 
 /**
  * Read a JSON settings file, returning null on any error.
@@ -34,25 +41,63 @@ function readSettingsFile(filePath: string): any {
 }
 
 /**
+ * Get merged code-nav settings (global overridden by project settings).
+ */
+function getCodeNavSettings(cwd: string): any {
+	const global = readSettingsFile(path.join(os.homedir(), ".pi", "agent", "settings.json"));
+	const project = readSettingsFile(path.join(cwd, ".pi", "settings.json"));
+
+	const globalCodeNav = global?.codeNav ?? {};
+	const projectCodeNav = project?.codeNav ?? {};
+
+	return {
+		...globalCodeNav,
+		...projectCodeNav,
+		indexing: {
+			...(globalCodeNav.indexing ?? {}),
+			...(projectCodeNav.indexing ?? {}),
+		},
+	};
+}
+
+/**
  * Check whether code-nav is enabled for a given project directory.
  * Reads project-level .pi/settings.json first, then global
  * ~/.pi/agent/settings.json. Defaults to disabled.
  */
 function isCodeNavEnabled(cwd: string): boolean {
-	// Project settings override global
-	const project = readSettingsFile(path.join(cwd, ".pi", "settings.json"));
-	if (project?.codeNav?.enabled !== undefined) {
-		return project.codeNav.enabled;
+	const settings = getCodeNavSettings(cwd);
+	if (settings?.enabled !== undefined) {
+		return !!settings.enabled;
 	}
-
-	// Global settings
-	const global = readSettingsFile(path.join(os.homedir(), ".pi", "agent", "settings.json"));
-	if (global?.codeNav?.enabled !== undefined) {
-		return global.codeNav.enabled;
-	}
-
-	// Default: disabled
 	return false;
+}
+
+/**
+ * Get indexing options with project/global overrides and sane defaults.
+ */
+function getFullIndexOptions(cwd: string): FullIndexOptions {
+	const settings = getCodeNavSettings(cwd);
+	const indexing = settings?.indexing ?? {};
+
+	const includeHiddenPaths = indexing.includeHiddenPaths ?? DEFAULT_INDEX_OPTIONS.includeHiddenPaths;
+	const rawMaxFileSize = Number(indexing.maxFileSizeBytes ?? DEFAULT_INDEX_OPTIONS.maxFileSizeBytes);
+	const maxFileSizeBytes = Number.isFinite(rawMaxFileSize)
+		? Math.max(10_000, Math.floor(rawMaxFileSize))
+		: DEFAULT_INDEX_OPTIONS.maxFileSizeBytes;
+
+	const excludedDirectories = Array.isArray(indexing.excludedDirectories)
+		? indexing.excludedDirectories
+			.filter((d: any) => typeof d === "string")
+			.map((d: string) => d.trim())
+			.filter(Boolean)
+		: DEFAULT_INDEX_OPTIONS.excludedDirectories;
+
+	return {
+		includeHiddenPaths: !!includeHiddenPaths,
+		maxFileSizeBytes,
+		excludedDirectories,
+	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -70,18 +115,19 @@ export default function (pi: ExtensionAPI) {
 	registerTools(pi, getStore, getRoot);
 
 	/**
-	 * Build FTS content index for all tracked files.
+	 * Backfill any missing FTS content rows for tracked files.
 	 * Called asynchronously after symbol indexing.
 	 */
 	function buildFtsIndex(store: Store, root: string) {
 		const files = store.getAllFiles();
 		let ftsCount = 0;
 		for (const { path: relPath } of files) {
+			if (store.hasIndexedContent(relPath)) continue;
 			indexFileContent(relPath, root, store);
 			ftsCount++;
 		}
 		store.setMeta("ftsBuilt", "1");
-		console.log(`[code-nav] FTS content indexed: ${ftsCount} files`);
+		console.log(`[code-nav] FTS backfilled: ${ftsCount} files`);
 	}
 
 	// Register /reindex command
@@ -101,10 +147,14 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Close old store and re-index
+			store.close();
 			const dbPath = path.join(ctx.cwd, ".pi", "code-nav", "index.db");
 			store = new Store(dbPath);
+			store.clearAll();
 
-			const result = fullIndex(ctx.cwd, store, ctx.cwd);
+			const indexOptions = getFullIndexOptions(ctx.cwd);
+			store.setMeta("indexOptions", JSON.stringify(indexOptions));
+			const result = fullIndex(ctx.cwd, store, ctx.cwd, indexOptions);
 			store.setMeta("rootPath", ctx.cwd);
 
 			// Re-build FTS in background
@@ -117,6 +167,45 @@ export default function (pi: ExtensionAPI) {
 				`[code-nav] Re-indexed: ${result.indexed} files, ${store.getStats().symbolCount} symbols (${result.totalMs}ms)`,
 				"info",
 			);
+		},
+	});
+
+	// Register /code-nav-config command
+	pi.registerCommand("code-nav-config", {
+		description: "Show effective code-nav configuration and index status",
+		handler: async (_args, ctx) => {
+			const enabled = isCodeNavEnabled(ctx.cwd);
+			const settings = getCodeNavSettings(ctx.cwd);
+			const indexOptions = getFullIndexOptions(ctx.cwd);
+			const dbPath = path.join(ctx.cwd, ".pi", "code-nav", "index.db");
+			const activeStore = store;
+			const stats = activeStore ? activeStore.getStats() : null;
+			const indexedRoot = activeStore?.getMeta("rootPath");
+			const ftsBuilt = activeStore?.getMeta("ftsBuilt") === "1";
+
+			const lines = [
+				"[code-nav] Effective configuration",
+				`enabled: ${enabled ? "true" : "false"}`,
+				`cwd: ${ctx.cwd}`,
+				`dbPath: ${dbPath}`,
+				`storeActive: ${activeStore ? "true" : "false"}`,
+				`indexedRoot: ${indexedRoot ?? "(none)"}`,
+				`ftsBuilt: ${ftsBuilt ? "true" : "false"}`,
+				`fileCount: ${stats?.fileCount ?? 0}`,
+				`symbolCount: ${stats?.symbolCount ?? 0}`,
+				"indexing:",
+				`  includeHiddenPaths: ${indexOptions.includeHiddenPaths ? "true" : "false"}`,
+				`  maxFileSizeBytes: ${indexOptions.maxFileSizeBytes}`,
+				`  excludedDirectories: ${indexOptions.excludedDirectories?.join(", ") || "(none)"}`,
+				"raw codeNav settings:",
+				JSON.stringify(settings, null, 2),
+			];
+			const text = lines.join("\n");
+
+			console.log(text);
+			if (ctx.hasUI) {
+				ctx.ui.notify(text, "info");
+			}
 		},
 	});
 
@@ -160,7 +249,9 @@ export default function (pi: ExtensionAPI) {
 
 		if (indexedRoot !== ctx.cwd || stats.fileCount === 0) {
 			// Full index needed
-			const result = fullIndex(ctx.cwd, store, ctx.cwd);
+			const indexOptions = getFullIndexOptions(ctx.cwd);
+			store.setMeta("indexOptions", JSON.stringify(indexOptions));
+			const result = fullIndex(ctx.cwd, store, ctx.cwd, indexOptions);
 			store.setMeta("rootPath", ctx.cwd);
 
 			if (ctx.hasUI) {
@@ -177,7 +268,9 @@ export default function (pi: ExtensionAPI) {
 			}, 0);
 		} else {
 			// Incremental update
-			const result = fullIndex(ctx.cwd, store, ctx.cwd);
+			const indexOptions = getFullIndexOptions(ctx.cwd);
+			store.setMeta("indexOptions", JSON.stringify(indexOptions));
+			const result = fullIndex(ctx.cwd, store, ctx.cwd, indexOptions);
 			store.setMeta("rootPath", ctx.cwd);
 
 			if (ctx.hasUI && (result.indexed > 0 || result.removed > 0)) {
