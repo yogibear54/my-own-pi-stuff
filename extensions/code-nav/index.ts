@@ -5,11 +5,55 @@
  * powered by Tree-sitter with a persistent SQLite index.
  */
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { initParser } from "./src/languages/registry.js";
 import { Store } from "./src/store.js";
 import { fullIndex, indexFileContent } from "./src/engine.js";
 import { registerTools } from "./src/tools.js";
+
+/** Code-nav tool names (used to enable/disable as a group). */
+const CODE_NAV_TOOLS = [
+	"code_nav_definition",
+	"code_nav_references",
+	"code_nav_symbols",
+	"code_nav_fetch_context",
+	"code_nav_search",
+];
+
+/**
+ * Read a JSON settings file, returning null on any error.
+ */
+function readSettingsFile(filePath: string): any {
+	try {
+		return JSON.parse(fs.readFileSync(filePath, "utf8"));
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Check whether code-nav is enabled for a given project directory.
+ * Reads project-level .pi/settings.json first, then global
+ * ~/.pi/agent/settings.json. Defaults to disabled.
+ */
+function isCodeNavEnabled(cwd: string): boolean {
+	// Project settings override global
+	const project = readSettingsFile(path.join(cwd, ".pi", "settings.json"));
+	if (project?.codeNav?.enabled !== undefined) {
+		return project.codeNav.enabled;
+	}
+
+	// Global settings
+	const global = readSettingsFile(path.join(os.homedir(), ".pi", "agent", "settings.json"));
+	if (global?.codeNav?.enabled !== undefined) {
+		return global.codeNav.enabled;
+	}
+
+	// Default: disabled
+	return false;
+}
 
 export default function (pi: ExtensionAPI) {
 	let store: Store | undefined;
@@ -44,6 +88,13 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("reindex", {
 		description: "Force a full re-index of the project for code navigation",
 		handler: async (_args, ctx) => {
+			if (!isCodeNavEnabled(ctx.cwd)) {
+				ctx.ui.notify(
+					"[code-nav] Not enabled for this project. Add `\"codeNav\": { \"enabled\": true }` to .pi/settings.json to enable.",
+					"warning",
+				);
+				return;
+			}
 			if (!store) {
 				ctx.ui.notify("[code-nav] No active index", "warning");
 				return;
@@ -72,6 +123,24 @@ export default function (pi: ExtensionAPI) {
 	// Initialize on session start
 	pi.on("session_start", async (_event, ctx) => {
 		projectRoot = ctx.cwd;
+
+		// Check if code-nav is enabled for this project
+		if (!isCodeNavEnabled(ctx.cwd)) {
+			// Disable code-nav tools so they don't appear in the tool list
+			const activeTools = pi.getActiveTools();
+			const filtered = activeTools
+				.filter((t) => !CODE_NAV_TOOLS.includes(t.name))
+				.map((t) => t.name);
+			pi.setActiveTools(filtered);
+
+			if (ctx.hasUI) {
+				ctx.ui.notify(
+					"[code-nav] Not enabled for this project. Add `\"codeNav\": { \"enabled\": true }` to .pi/settings.json to enable. Use /tools to manage tools.",
+					"info",
+				);
+			}
+			return;
+		}
 
 		// Initialize Tree-sitter (async, one-time WASM load)
 		try {
