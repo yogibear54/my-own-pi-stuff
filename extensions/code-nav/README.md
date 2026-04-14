@@ -39,13 +39,13 @@ Gives the LLM (and you) **go-to-definition**, **find-references**, **symbol list
    npm install
    ```
 
-2. Add the extension to your Pi configuration (e.g. `.pi/settings.json`):
+2. Move (or symlink) the extension to Pi's auto-discovery directory:
 
-   ```json
-   {
-     "extensions": ["./path/to/code-nav"]
-   }
+   ```bash
+   mv path/to/code-nav ~/.pi/agent/extensions/code-nav
    ```
+
+   Or clone directly into that location. Extensions in `~/.pi/agent/extensions/*/index.ts` are **auto-discovered** — no settings.json entry needed.
 
 3. Start (or restart) Pi.
 
