@@ -2,6 +2,7 @@
  * Skill Manager Extension
  *
  * Provides commands to enable/disable skills in the current session.
+ * Persists disabled skills to skills-config.json (project-level or global).
  *
  * Commands:
  *   /skill:disable <name>  - Disable a skill (removes from system prompt)
@@ -10,13 +11,26 @@
  *   /skill:reset           - Re-enable all skills
  */
 
-import type { ExtensionAPI, SlashCommandInfo } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SlashCommandInfo } from "@mariozechner/pi-coding-agent";
+import { getDisabledFromConfig, saveDisabledToConfig } from "../utils/config-utils";
 
+const SKILL_CONFIG_NAME = "skills-config.json";
 const SKILL_PATTERN = /<skill>\s*<name>([^<]+)<\/name>\s*<description>([^<]*)<\/description>\s*<\/skill>/gs;
 
 export default function skillManagerExtension(pi: ExtensionAPI) {
-	// Track disabled skills in memory
-	const disabledSkills = new Set<string>();
+	// Track disabled skills (loaded from config)
+	let disabledSkills: Set<string> = new Set();
+
+	// Load disabled skills from config
+	function loadDisabledSkills(cwd: string = process.cwd()): void {
+		const configDisabled = getDisabledFromConfig(SKILL_CONFIG_NAME, cwd);
+		disabledSkills = new Set(configDisabled.map((s) => s.toLowerCase()));
+	}
+
+	// Persist disabled skills to config
+	function persistDisabledSkills(cwd: string = process.cwd()): void {
+		saveDisabledToConfig(SKILL_CONFIG_NAME, Array.from(disabledSkills), cwd);
+	}
 
 	// Get all skill commands available
 	function getSkillCommands(): SlashCommandInfo[] {
@@ -39,8 +53,8 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 			const skills = getSkillCommands();
 			const available = skills
 				.map((s) => parseSkillName(s.name))
-				.filter((name) => !disabledSkills.has(name) && name.startsWith(prefix));
-			return available.length > 0? available.map((name) => ({ value: name, label: name })) : null;
+				.filter((name) => !disabledSkills.has(name.toLowerCase()) && name.startsWith(prefix));
+			return available.length > 0 ? available.map((name) => ({ value: name, label: name })) : null;
 		},
 		handler: async (args: string, ctx) => {
 			const skillName = args.trim().toLowerCase();
@@ -67,6 +81,7 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 			}
 
 			disabledSkills.add(skillName);
+			persistDisabledSkills(ctx.cwd);
 			ctx.ui.notify(`Disabled skill: ${skillName}\nUse /skill:enable ${skillName} to re-enable`, "info");
 		},
 	});
@@ -78,7 +93,7 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 			const disabled = Array.from(disabledSkills).filter((name) =>
 				name.startsWith(prefix)
 			);
-			return disabled.length > 0? disabled.map((name) => ({ value: name, label: name })) : null;
+			return disabled.length > 0 ? disabled.map((name) => ({ value: name, label: name })) : null;
 		},
 		handler: async (args: string, ctx) => {
 			const skillName = args.trim().toLowerCase();
@@ -94,6 +109,7 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 			}
 
 			disabledSkills.delete(skillName);
+			persistDisabledSkills(ctx.cwd);
 			ctx.ui.notify(`Enabled skill: ${skillName}`, "info");
 		},
 	});
@@ -113,7 +129,7 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 			const items: string[] = [];
 
 			for (const name of skillNames) {
-				const status = disabledSkills.has(name) ? "[DISABLED]" : "[ENABLED]";
+				const status = disabledSkills.has(name.toLowerCase()) ? "[DISABLED]" : "[ENABLED]";
 				const skill = skills.find((s) => parseSkillName(s.name) === name);
 				const desc = skill?.description ? ` - ${skill.description}` : "";
 				items.push(`${status} ${name}${desc}`);
@@ -149,6 +165,7 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 
 			const skillList = Array.from(disabledSkills).join(", ");
 			disabledSkills.clear();
+			persistDisabledSkills(ctx.cwd);
 			ctx.ui.notify(`Re-enabled ${count} skill(s): ${skillList}`, "info");
 		},
 	});
@@ -235,5 +252,15 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 				}
 			}
 		}
+	});
+
+	// Restore state on session start
+	pi.on("session_start", async (_event, ctx) => {
+		loadDisabledSkills(ctx.cwd);
+	});
+
+	// Restore state when navigating the session tree
+	pi.on("session_tree", async (_event, ctx) => {
+		loadDisabledSkills(ctx.cwd);
 	});
 }

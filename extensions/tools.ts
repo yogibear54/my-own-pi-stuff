@@ -21,16 +21,16 @@ interface ToolsState {
 	enabledTools: string[];
 }
 
-const CONFIG_DIR = join(homedir(), ".pi", "agent");
-const CONFIG_PATH = join(CONFIG_DIR, "tools-config.json");
+const TOOLS_CONFIG_NAME = "tools-config.json";
+const GLOBAL_CONFIG_DIR = join(homedir(), ".pi", "agent");
 
 // Get config path: project-level takes precedence over global
-export function getConfigPath(cwd: string = process.cwd()): string {
-	const projectPath = join(cwd, ".pi", "agent", "tools-config.json");
+export function getToolsConfigPath(cwd: string = process.cwd()): string {
+	const projectPath = join(cwd, ".pi", "agent", TOOLS_CONFIG_NAME);
 	if (existsSync(projectPath)) {
 		return projectPath;
 	}
-	return CONFIG_PATH;
+	return join(GLOBAL_CONFIG_DIR, TOOLS_CONFIG_NAME);
 }
 
 export default function toolsExtension(pi: ExtensionAPI) {
@@ -46,8 +46,8 @@ export default function toolsExtension(pi: ExtensionAPI) {
 		});
 		// Persist to file (project-level takes precedence)
 		try {
-			mkdirSync(CONFIG_DIR, { recursive: true });
-			const configPath = getConfigPath(cwd);
+			mkdirSync(GLOBAL_CONFIG_DIR, { recursive: true });
+			const configPath = getToolsConfigPath(cwd);
 			writeFileSync(configPath, JSON.stringify({ enabledTools: tools }, null, "\t") + "\n");
 		} catch {
 			// Silently ignore file write errors
@@ -84,7 +84,7 @@ export default function toolsExtension(pi: ExtensionAPI) {
 		} else {
 			// No session state - try loading from file (project-level takes precedence)
 			let fileTools: string[] | undefined;
-			const configPath = getConfigPath(cwd);
+			const configPath = getToolsConfigPath(cwd);
 			try {
 				const raw = readFileSync(configPath, "utf-8");
 				const data = JSON.parse(raw);
