@@ -12,7 +12,7 @@
 import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@mariozechner/pi-coding-agent";
 import { getSettingsListTheme } from "@mariozechner/pi-coding-agent";
 import { Container, type SettingItem, SettingsList } from "@mariozechner/pi-tui";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -24,21 +24,31 @@ interface ToolsState {
 const CONFIG_DIR = join(homedir(), ".pi", "agent");
 const CONFIG_PATH = join(CONFIG_DIR, "tools-config.json");
 
+// Get config path: project-level takes precedence over global
+export function getConfigPath(cwd: string = process.cwd()): string {
+	const projectPath = join(cwd, ".pi", "agent", "tools-config.json");
+	if (existsSync(projectPath)) {
+		return projectPath;
+	}
+	return CONFIG_PATH;
+}
+
 export default function toolsExtension(pi: ExtensionAPI) {
 	// Track enabled tools
 	let enabledTools: Set<string> = new Set();
 	let allTools: ToolInfo[] = [];
 
 	// Persist current state to session and file
-	function persistState() {
+	function persistState(cwd: string = process.cwd()) {
 		const tools = Array.from(enabledTools);
 		pi.appendEntry<ToolsState>("tools-config", {
 			enabledTools: tools,
 		});
-		// Also persist to file for cross-session survival
+		// Persist to file (project-level takes precedence)
 		try {
 			mkdirSync(CONFIG_DIR, { recursive: true });
-			writeFileSync(CONFIG_PATH, JSON.stringify({ enabledTools: tools }, null, "\t") + "\n");
+			const configPath = getConfigPath(cwd);
+			writeFileSync(configPath, JSON.stringify({ enabledTools: tools }, null, "\t") + "\n");
 		} catch {
 			// Silently ignore file write errors
 		}
@@ -50,7 +60,7 @@ export default function toolsExtension(pi: ExtensionAPI) {
 	}
 
 	// Find the last tools-config entry in the current branch
-	function restoreFromBranch(ctx: ExtensionContext) {
+	function restoreFromBranch(ctx: ExtensionContext, cwd: string = process.cwd()) {
 		allTools = pi.getAllTools();
 
 		// Get entries in current branch only
@@ -72,10 +82,11 @@ export default function toolsExtension(pi: ExtensionAPI) {
 			enabledTools = new Set(savedTools.filter((t: string) => allToolNames.includes(t)));
 			applyTools();
 		} else {
-			// No session state - try loading from file
+			// No session state - try loading from file (project-level takes precedence)
 			let fileTools: string[] | undefined;
+			const configPath = getConfigPath(cwd);
 			try {
-				const raw = readFileSync(CONFIG_PATH, "utf-8");
+				const raw = readFileSync(configPath, "utf-8");
 				const data = JSON.parse(raw);
 				if (Array.isArray(data?.enabledTools)) fileTools = data.enabledTools;
 			} catch {
@@ -131,7 +142,7 @@ export default function toolsExtension(pi: ExtensionAPI) {
 							enabledTools.delete(id);
 						}
 						applyTools();
-						persistState();
+						persistState(ctx.cwd);
 					},
 					() => {
 						// Close dialog
@@ -161,11 +172,11 @@ export default function toolsExtension(pi: ExtensionAPI) {
 
 	// Restore state on session start
 	pi.on("session_start", async (_event, ctx) => {
-		restoreFromBranch(ctx);
+		restoreFromBranch(ctx, ctx.cwd);
 	});
 
 	// Restore state when navigating the session tree
 	pi.on("session_tree", async (_event, ctx) => {
-		restoreFromBranch(ctx);
+		restoreFromBranch(ctx, ctx.cwd);
 	});
 }
