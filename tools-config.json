@@ -5,11 +5,6 @@
 		"edit",
 		"write",
 		"questionnaire",
-		"todo",
-		"code_nav_definition",
-		"code_nav_references",
-		"code_nav_symbols",
-		"code_nav_fetch_context",
-		"code_nav_search"
+		"todo"
 	]
 }
