@@ -17,6 +17,12 @@
     "web-tree-sitter": "^0.26.8"
   },
   "devDependencies": {
-    "typescript": "^6.0.2"
+    "@sinclair/typebox": "^0.34.49",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest --watch"
   }
 }
