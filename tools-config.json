@@ -1,6 +1,5 @@
 {
 	"enabledTools": [
-		"read",
 		"bash",
 		"edit",
 		"write",
@@ -10,6 +9,7 @@
 		"code_nav_references",
 		"code_nav_symbols",
 		"code_nav_fetch_context",
-		"code_nav_search"
+		"code_nav_search",
+		"read"
 	]
 }
