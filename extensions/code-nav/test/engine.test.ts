@@ -278,6 +278,14 @@ describe("engine integration", () => {
 			expect(padded.content.split("\n").length).toBeGreaterThanOrEqual(small.content.split("\n").length);
 		});
 
+		it("shows full body for interfaces with no indexed members", () => {
+			const { store: s, root: r } = setup();
+			const result = fetchContext("Config", s, r, { contextFile: "src/utils.ts" });
+			// Config is a type alias with no indexed members — should show full body, not "(no members indexed)"
+			expect(result.content).toContain("debug");
+			expect(result.content).not.toContain("no members indexed");
+		});
+
 		it("returns not-found for unknown symbol", () => {
 			const { store: s, root: r } = setup();
 			const result = fetchContext("nonexistent_xyz", s, r, {});

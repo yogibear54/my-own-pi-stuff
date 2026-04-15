@@ -520,6 +520,13 @@ function buildContainerResult(
 	const scopeName = sym.name;
 	const members = store.findMembersOfScope(sym.file, scopeName);
 
+	// If no indexed members, fall back to showing the full body like a regular symbol.
+	// This handles interfaces, type aliases, and enums whose properties aren't
+	// captured by tree-sitter queries.
+	if (members.length === 0) {
+		return buildPaddedResult(sym, lines, totalLines, 0, 0, maxLines);
+	}
+
 	// Declaration lines: from sym.line to first member or endLine (whichever is smaller)
 	const declEnd = members.length > 0
 		? Math.min(members[0].line - 1, sym.endLine)
@@ -534,20 +541,16 @@ function buildContainerResult(
 	content += "━".repeat(40) + "\n";
 	content += headerLines.join("\n") + "\n";
 
-	if (members.length > 0) {
-		content += "\n── Members ──\n";
-		const maxMembers = maxLines - headerLines.length - 5; // Reserve lines for header/separators
-		const shown = members.slice(0, Math.max(maxMembers, 10));
-		for (const m of shown) {
-			const vis = m.visibility ? `[${m.visibility}] ` : "";
-			const sig = m.signature && m.signature.length < signatureDisplayLength ? `  ${m.signature}` : "";
-			content += `  ${m.line} | ${vis}${m.kind} ${m.name}${sig}\n`;
-		}
-		if (members.length > shown.length) {
-			content += `  ... and ${members.length - shown.length} more members\n`;
-		}
-	} else {
-		content += "  (no members indexed)\n";
+	content += "\n── Members ──\n";
+	const maxMembers = maxLines - headerLines.length - 5; // Reserve lines for header/separators
+	const shown = members.slice(0, Math.max(maxMembers, 10));
+	for (const m of shown) {
+		const vis = m.visibility ? `[${m.visibility}] ` : "";
+		const sig = m.signature && m.signature.length < signatureDisplayLength ? `  ${m.signature}` : "";
+		content += `  ${m.line} | ${vis}${m.kind} ${m.name}${sig}\n`;
+	}
+	if (members.length > shown.length) {
+		content += `  ... and ${members.length - shown.length} more members\n`;
 	}
 
 	return {
