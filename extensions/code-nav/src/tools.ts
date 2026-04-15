@@ -4,6 +4,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { Store } from "./store.js";
+import type { CodeNavToolsConfig } from "./config.js";
 
 interface IndexingPolicyDetails {
 	includeHiddenPaths: boolean;
@@ -38,6 +39,7 @@ export function registerTools(
 	pi: ExtensionAPI,
 	getStore: () => Store | undefined,
 	getRoot: () => string,
+	getConfig: () => CodeNavToolsConfig,
 ) {
 	// Tool: Find definition
 	pi.registerTool({
@@ -91,7 +93,7 @@ export function registerTools(
 			}
 
 			// Limit output
-			const max = 20;
+			const max = getConfig().tools.definitionMaxResults;
 			const shown = results.slice(0, max);
 			let text = `Found ${results.length} definition(s) for "${params.symbol}":\n\n`;
 
@@ -180,8 +182,8 @@ export function registerTools(
 				byFile.set(r.file, arr);
 			}
 
-			const maxFiles = 15;
-			const maxPerFile = 10;
+			const maxFiles = getConfig().tools.referenceMaxFiles;
+			const maxPerFile = getConfig().tools.referenceMaxPerFile;
 			let text = `Found ${results.length} reference(s) for "${params.symbol}" in ${byFile.size} file(s):\n\n`;
 
 			let fileCount = 0;
@@ -282,7 +284,7 @@ export function registerTools(
 			} else if (params.query) {
 				// Workspace search
 				const results = await import("./engine.js").then((e) =>
-					e.searchSymbols(params.query!, store),
+					e.searchSymbols(params.query!, store, getConfig().tools.symbolSearchLimit),
 				);
 
 				if (results.length === 0) {
@@ -382,13 +384,14 @@ export function registerTools(
 			}
 
 			const root = getRoot();
+			const config = getConfig();
 			const result = await import("./engine.js").then((e) =>
 				e.fetchContext(params.symbol, store, root, {
 					contextFile: params.file,
 					before: params.before,
 					after: params.after,
 					maxLines: params.maxLines,
-				}),
+				}, config.fetchContext),
 			);
 
 			return {
@@ -470,12 +473,13 @@ export function registerTools(
 			}
 
 			const root = getRoot();
-			const limit = params.limit ?? 30;
+			const config = getConfig();
+			const limit = params.limit ?? config.tools.searchDefaultLimit;
 			const { results, totalMatches, totalFilesMatched, truncated, stats } = await import("./engine.js").then((e) =>
 				e.searchCodebase(params.query, store, root, limit, {
-					scanMultiplier: params.scanMultiplier,
-					maxCandidateFiles: params.maxCandidateFiles,
-					maxLinesScanned: params.maxLinesScanned,
+					scanMultiplier: params.scanMultiplier ?? config.search.defaultScanMultiplier,
+					maxCandidateFiles: params.maxCandidateFiles ?? config.search.defaultMaxCandidateFiles,
+					maxLinesScanned: params.maxLinesScanned ?? config.search.defaultMaxLinesScanned ?? undefined,
 					signal,
 				}),
 			);

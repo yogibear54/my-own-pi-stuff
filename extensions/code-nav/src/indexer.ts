@@ -15,6 +15,13 @@ export interface IndexResult {
 	hash: string;
 }
 
+export interface IndexerConfig {
+	/** Min identifier length to index. Default: 2. */
+	minNameLength: number;
+	/** Max signature text length before truncation. Default: 120. */
+	maxSignatureLength: number;
+}
+
 /**
  * Index a single file. Returns extracted symbols and metadata.
  * Returns undefined if the file can't be indexed (unsupported language, too large, etc.).
@@ -23,6 +30,7 @@ export function indexFile(
 	filePath: string,
 	relativePath: string,
 	maxFileSize: number = 1_000_000,
+	indexerConfig?: IndexerConfig,
 ): IndexResult | undefined {
 	const langDef = detectLanguage(filePath);
 	if (!langDef) return undefined;
@@ -47,7 +55,7 @@ export function indexFile(
 	const tree = parser.parse(source);
 	if (!tree) return undefined;
 
-	const symbols = extractSymbols(tree, source, relativePath, langDef, loaded.queries);
+	const symbols = extractSymbols(tree, source, relativePath, langDef, loaded.queries, indexerConfig);
 	return { symbols, language: langDef.name, hash };
 }
 
@@ -60,6 +68,7 @@ function extractSymbols(
 	filePath: string,
 	langDef: LanguageDef,
 	queries: Map<string, Query>,
+	indexerConfig?: IndexerConfig,
 ): Omit<SymbolRecord, "id">[] {
 	const symbols: Omit<SymbolRecord, "id">[] = [];
 
@@ -76,13 +85,13 @@ function extractSymbols(
 
 				// Skip very short names (single chars, underscores)
 				const name = nameNode.text;
-				if (name.length < 2) continue;
+				if (name.length < (indexerConfig?.minNameLength ?? 2)) continue;
 
 				// Determine scope (parent class/function)
 				const scope = findScope(node);
 
 				// Extract signature (first line of the node text)
-				const signature = extractSignature(node.text, kind);
+				const signature = extractSignature(node.text, kind, indexerConfig?.maxSignatureLength);
 
 				// Visibility
 				const visibility = extractVisibility(node, langDef);
@@ -155,11 +164,11 @@ function findScope(node: any): string | null {
 /**
  * Extract a one-line signature from node text.
  */
-function extractSignature(text: string, kind: string): string {
+function extractSignature(text: string, kind: string, maxSignatureLength: number = 120): string {
 	const firstLine = text.split("\n")[0];
 	// Trim to reasonable length
-	if (firstLine.length > 120) {
-		return firstLine.slice(0, 117) + "...";
+	if (firstLine.length > maxSignatureLength) {
+		return firstLine.slice(0, maxSignatureLength - 3) + "...";
 	}
 	return firstLine;
 }

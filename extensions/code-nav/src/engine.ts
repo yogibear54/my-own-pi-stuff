@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Store, SymbolRecord } from "./store.js";
 import { indexFile, hashContent } from "./indexer.js";
+import type { IndexerConfig } from "./indexer.js";
 import { getSupportedExtensions } from "./languages/registry.js";
 
 /** Regex: split camelCase and PascalCase at word boundaries. */
@@ -142,6 +143,8 @@ export interface FullIndexOptions {
 	excludedDirectories?: string[];
 	/** Maximum source file size to parse in bytes. Default: 1_000_000 (1MB). */
 	maxFileSizeBytes?: number;
+	/** Indexer behavior knobs. */
+	indexer?: IndexerConfig;
 }
 
 const DEFAULT_EXCLUDED_DIRS = [
@@ -226,7 +229,7 @@ export function fullIndex(
 				}
 
 				if (needsIndex) {
-					const result = indexFile(fullPath, relativePath, maxFileSizeBytes);
+					const result = indexFile(fullPath, relativePath, maxFileSizeBytes, options.indexer);
 					if (result) {
 						store.indexFile(relativePath, result.language, result.hash, result.symbols);
 						indexFileContent(relativePath, projectRoot, store);
@@ -271,11 +274,11 @@ export function reindexFile(
 	projectRoot: string,
 	store: Store,
 	relativeTo: string,
-	options: Pick<FullIndexOptions, "maxFileSizeBytes"> = {},
+	options: Pick<FullIndexOptions, "maxFileSizeBytes" | "indexer"> = {},
 ): boolean {
 	const relativePath = path.relative(relativeTo, absolutePath);
 	const maxFileSizeBytes = Math.max(10_000, Math.floor(options.maxFileSizeBytes ?? 1_000_000));
-	const result = indexFile(absolutePath, relativePath, maxFileSizeBytes);
+	const result = indexFile(absolutePath, relativePath, maxFileSizeBytes, options.indexer);
 	if (result) {
 		store.indexFile(relativePath, result.language, result.hash, result.symbols);
 		indexFileContent(relativePath, projectRoot, store);
@@ -424,6 +427,15 @@ export function searchSymbols(
 	return symbols.map((sym) => ({ symbol: sym }));
 }
 
+export interface FetchContextConfig {
+	defaultBefore: number;
+	defaultAfter: number;
+	defaultMaxLines: number;
+	maxLinesCap: number;
+	containerDeclMaxLines: number;
+	signatureDisplayLength: number;
+}
+
 /**
  * Fetch symbol context with asymmetric configurable padding.
  *
@@ -440,9 +452,14 @@ export function fetchContext(
 		after?: number;
 		maxLines?: number;
 	} = {},
+	config?: FetchContextConfig,
 ): FetchContextResult {
-	const { contextFile, before = 5, after = 5, maxLines: rawMax = 100 } = options;
-	const maxLines = Math.min(rawMax, 200); // Hard cap at 200
+	const { contextFile } = options;
+	const before = options.before ?? config?.defaultBefore ?? 5;
+	const after = options.after ?? config?.defaultAfter ?? 5;
+	const maxLinesCap = config?.maxLinesCap ?? 200;
+	const rawMax = options.maxLines ?? config?.defaultMaxLines ?? 100;
+	const maxLines = Math.min(rawMax, maxLinesCap);
 
 	const sym = store.getBestDefinition(name, contextFile);
 	if (!sym) {
@@ -475,7 +492,7 @@ export function fetchContext(
 
 	// Container types get member summary instead of full body
 	if (isContainerKind(sym.kind)) {
-		return buildContainerResult(sym, store, lines, totalLines, maxLines);
+		return buildContainerResult(sym, store, lines, totalLines, maxLines, config);
 	}
 
 	return buildPaddedResult(sym, lines, totalLines, before, after, maxLines);
@@ -495,14 +512,18 @@ function buildContainerResult(
 	lines: string[],
 	totalLines: number,
 	maxLines: number,
+	config?: FetchContextConfig,
 ): FetchContextResult {
+	const containerDeclMaxLines = config?.containerDeclMaxLines ?? 10;
+	const signatureDisplayLength = config?.signatureDisplayLength ?? 80;
+
 	const scopeName = sym.name;
 	const members = store.findMembersOfScope(sym.file, scopeName);
 
 	// Declaration lines: from sym.line to first member or endLine (whichever is smaller)
 	const declEnd = members.length > 0
 		? Math.min(members[0].line - 1, sym.endLine)
-		: Math.min(sym.line + 10, sym.endLine); // Up to 10 lines of declaration
+		: Math.min(sym.line + containerDeclMaxLines, sym.endLine);
 
 	const headerLines: string[] = [];
 	for (let i = sym.line - 1; i < declEnd && i < totalLines; i++) {
@@ -519,7 +540,7 @@ function buildContainerResult(
 		const shown = members.slice(0, Math.max(maxMembers, 10));
 		for (const m of shown) {
 			const vis = m.visibility ? `[${m.visibility}] ` : "";
-			const sig = m.signature && m.signature.length < 80 ? `  ${m.signature}` : "";
+			const sig = m.signature && m.signature.length < signatureDisplayLength ? `  ${m.signature}` : "";
 			content += `  ${m.line} | ${vis}${m.kind} ${m.name}${sig}\n`;
 		}
 		if (members.length > shown.length) {

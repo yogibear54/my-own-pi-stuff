@@ -8,10 +8,12 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initParser } from "./src/languages/registry.js";
+import { initParser, setEnabledLanguages } from "./src/languages/registry.js";
 import { Store } from "./src/store.js";
 import { fullIndex, indexFileContent } from "./src/engine.js";
 import type { FullIndexOptions } from "./src/engine.js";
+import { resolveToolsConfig } from "./src/config.js";
+import type { CodeNavToolsConfig } from "./src/config.js";
 import { registerTools } from "./src/tools.js";
 
 /** Code-nav tool names (used to enable/disable as a group). */
@@ -27,6 +29,7 @@ const DEFAULT_INDEX_OPTIONS: Required<FullIndexOptions> = {
 	includeHiddenPaths: true,
 	excludedDirectories: ["node_modules", "vendor", "dist", "build", ".git", ".pi", "__pycache__"],
 	maxFileSizeBytes: 1_000_000,
+	indexer: { minNameLength: 2, maxSignatureLength: 120 },
 };
 
 /**
@@ -97,7 +100,16 @@ function getFullIndexOptions(cwd: string): FullIndexOptions {
 		includeHiddenPaths: !!includeHiddenPaths,
 		maxFileSizeBytes,
 		excludedDirectories,
+		indexer: resolveToolsConfig(settings).indexer,
 	};
+}
+
+/**
+ * Get resolved tools + search config for a project directory.
+ */
+function resolveAndStoreConfig(cwd: string): CodeNavToolsConfig {
+	const settings = getCodeNavSettings(cwd);
+	return resolveToolsConfig(settings);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -110,9 +122,19 @@ export default function (pi: ExtensionAPI) {
 	// Shared state getters for tools
 	const getStore = () => store;
 	const getRoot = () => projectRoot;
+	const getConfig = (): CodeNavToolsConfig => {
+		const raw = store?.getMeta("toolsConfig");
+		if (raw) {
+			try {
+				const parsed = JSON.parse(raw);
+				if (parsed && typeof parsed === "object") return parsed as CodeNavToolsConfig;
+			} catch { /* fall through */ }
+		}
+		return resolveToolsConfig({});
+	};
 
 	// Register tools
-	registerTools(pi, getStore, getRoot);
+	registerTools(pi, getStore, getRoot, getConfig);
 
 	/**
 	 * Backfill any missing FTS content rows for tracked files.
@@ -149,11 +171,13 @@ export default function (pi: ExtensionAPI) {
 			// Close old store and re-index
 			store.close();
 			const dbPath = path.join(ctx.cwd, ".pi", "code-nav", "index.db");
-			store = new Store(dbPath);
+			const toolsConfig = resolveAndStoreConfig(ctx.cwd);
+			store = new Store(dbPath, toolsConfig.database);
 			store.clearAll();
 
 			const indexOptions = getFullIndexOptions(ctx.cwd);
 			store.setMeta("indexOptions", JSON.stringify(indexOptions));
+			store.setMeta("toolsConfig", JSON.stringify(toolsConfig));
 			const result = fullIndex(ctx.cwd, store, ctx.cwd, indexOptions);
 			store.setMeta("rootPath", ctx.cwd);
 
@@ -177,6 +201,7 @@ export default function (pi: ExtensionAPI) {
 			const enabled = isCodeNavEnabled(ctx.cwd);
 			const settings = getCodeNavSettings(ctx.cwd);
 			const indexOptions = getFullIndexOptions(ctx.cwd);
+			const toolsConfig = resolveAndStoreConfig(ctx.cwd);
 			const dbPath = path.join(ctx.cwd, ".pi", "code-nav", "index.db");
 			const activeStore = store;
 			const stats = activeStore ? activeStore.getStats() : null;
@@ -197,6 +222,32 @@ export default function (pi: ExtensionAPI) {
 				`  includeHiddenPaths: ${indexOptions.includeHiddenPaths ? "true" : "false"}`,
 				`  maxFileSizeBytes: ${indexOptions.maxFileSizeBytes}`,
 				`  excludedDirectories: ${indexOptions.excludedDirectories?.join(", ") || "(none)"}`,
+				"tools:",
+				`  definitionMaxResults: ${toolsConfig.tools.definitionMaxResults}`,
+				`  referenceMaxFiles: ${toolsConfig.tools.referenceMaxFiles}`,
+				`  referenceMaxPerFile: ${toolsConfig.tools.referenceMaxPerFile}`,
+				`  symbolSearchLimit: ${toolsConfig.tools.symbolSearchLimit}`,
+				`  searchDefaultLimit: ${toolsConfig.tools.searchDefaultLimit}`,
+				"search:",
+				`  defaultScanMultiplier: ${toolsConfig.search.defaultScanMultiplier}`,
+				`  defaultMaxCandidateFiles: ${toolsConfig.search.defaultMaxCandidateFiles}`,
+				`  defaultMaxLinesScanned: ${toolsConfig.search.defaultMaxLinesScanned ?? "(unlimited)"}`,
+				"fetchContext:",
+				`  defaultBefore: ${toolsConfig.fetchContext.defaultBefore}`,
+				`  defaultAfter: ${toolsConfig.fetchContext.defaultAfter}`,
+				`  defaultMaxLines: ${toolsConfig.fetchContext.defaultMaxLines}`,
+				`  maxLinesCap: ${toolsConfig.fetchContext.maxLinesCap}`,
+				`  containerDeclMaxLines: ${toolsConfig.fetchContext.containerDeclMaxLines}`,
+				`  signatureDisplayLength: ${toolsConfig.fetchContext.signatureDisplayLength}`,
+				"database:",
+				`  journalMode: ${toolsConfig.database.journalMode}`,
+				`  synchronous: ${toolsConfig.database.synchronous}`,
+				`  cacheSizeMB: ${toolsConfig.database.cacheSizeMB}`,
+				"languages:",
+				`  enabled: ${toolsConfig.languages.enabled.join(", ")}`,
+				"indexer:",
+				`  minNameLength: ${toolsConfig.indexer.minNameLength}`,
+				`  maxSignatureLength: ${toolsConfig.indexer.maxSignatureLength}`,
 				"raw codeNav settings:",
 				JSON.stringify(settings, null, 2),
 			];
@@ -232,8 +283,10 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// Initialize Tree-sitter (async, one-time WASM load)
+		const toolsConfig = resolveAndStoreConfig(ctx.cwd);
+		setEnabledLanguages(toolsConfig.languages.enabled);
 		try {
-			await initParser(extDir);
+			await initParser(extDir, toolsConfig.languages.enabled);
 		} catch (e: any) {
 			console.error(`[code-nav] Failed to initialize Tree-sitter: ${e.message}`);
 			return;
@@ -241,7 +294,7 @@ export default function (pi: ExtensionAPI) {
 
 		// Open or create index
 		const dbPath = path.join(ctx.cwd, ".pi", "code-nav", "index.db");
-		store = new Store(dbPath);
+		store = new Store(dbPath, toolsConfig.database);
 
 		// Check if we need to index
 		const indexedRoot = store.getMeta("rootPath");
@@ -251,6 +304,7 @@ export default function (pi: ExtensionAPI) {
 			// Full index needed
 			const indexOptions = getFullIndexOptions(ctx.cwd);
 			store.setMeta("indexOptions", JSON.stringify(indexOptions));
+			store.setMeta("toolsConfig", JSON.stringify(toolsConfig));
 			const result = fullIndex(ctx.cwd, store, ctx.cwd, indexOptions);
 			store.setMeta("rootPath", ctx.cwd);
 
@@ -270,6 +324,7 @@ export default function (pi: ExtensionAPI) {
 			// Incremental update
 			const indexOptions = getFullIndexOptions(ctx.cwd);
 			store.setMeta("indexOptions", JSON.stringify(indexOptions));
+			store.setMeta("toolsConfig", JSON.stringify(toolsConfig));
 			const result = fullIndex(ctx.cwd, store, ctx.cwd, indexOptions);
 			store.setMeta("rootPath", ctx.cwd);
 

@@ -57,6 +57,12 @@ export interface FileRecord {
 	symbolCount: number;
 }
 
+export interface DatabaseConfig {
+	journalMode: string;
+	synchronous: string;
+	cacheSizeMB: number;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
@@ -143,14 +149,18 @@ export class Store {
 		getAllFilesWithMeta: Database.Statement;
 	};
 
-	constructor(dbPath: string) {
+	constructor(dbPath: string, dbConfig?: DatabaseConfig) {
 		// Ensure directory exists
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
+		const journalMode = dbConfig?.journalMode ?? "WAL";
+		const synchronous = dbConfig?.synchronous ?? "NORMAL";
+		const cacheSizeMB = dbConfig?.cacheSizeMB ?? 32;
+
 		this.db = new Database(dbPath);
-		this.db.pragma("journal_mode = WAL");
-		this.db.pragma("synchronous = NORMAL");
-		this.db.pragma("cache_size = -32000"); // 32MB cache
+		this.db.pragma(`journal_mode = ${journalMode}`);
+		this.db.pragma(`synchronous = ${synchronous}`);
+		this.db.pragma(`cache_size = -${cacheSizeMB * 1000}`);
 
 		this.db.exec(SCHEMA);
 		this.prepareStatements();
