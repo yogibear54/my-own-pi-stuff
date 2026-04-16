@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Store, SymbolRecord } from "./store.js";
 import { indexFile, hashContent } from "./indexer.js";
+import type { IndexerConfig } from "./indexer.js";
 import { getSupportedExtensions } from "./languages/registry.js";
 
 /** Regex: split camelCase and PascalCase at word boundaries. */
@@ -133,6 +134,8 @@ export interface SearchCodebaseOptions {
 	maxLinesScanned?: number;
 	/** Optional cancellation signal for long-running searches. */
 	signal?: { aborted?: boolean };
+	/** Set of dirty file paths from the watcher. If provided, only these files are re-indexed. */
+	dirtySet?: Set<string>;
 }
 
 export interface FullIndexOptions {
@@ -142,6 +145,8 @@ export interface FullIndexOptions {
 	excludedDirectories?: string[];
 	/** Maximum source file size to parse in bytes. Default: 1_000_000 (1MB). */
 	maxFileSizeBytes?: number;
+	/** Indexer behavior knobs. */
+	indexer?: IndexerConfig;
 }
 
 const DEFAULT_EXCLUDED_DIRS = [
@@ -226,7 +231,7 @@ export function fullIndex(
 				}
 
 				if (needsIndex) {
-					const result = indexFile(fullPath, relativePath, maxFileSizeBytes);
+					const result = indexFile(fullPath, relativePath, maxFileSizeBytes, options.indexer);
 					if (result) {
 						store.indexFile(relativePath, result.language, result.hash, result.symbols);
 						indexFileContent(relativePath, projectRoot, store);
@@ -271,11 +276,11 @@ export function reindexFile(
 	projectRoot: string,
 	store: Store,
 	relativeTo: string,
-	options: Pick<FullIndexOptions, "maxFileSizeBytes"> = {},
+	options: Pick<FullIndexOptions, "maxFileSizeBytes" | "indexer"> = {},
 ): boolean {
 	const relativePath = path.relative(relativeTo, absolutePath);
 	const maxFileSizeBytes = Math.max(10_000, Math.floor(options.maxFileSizeBytes ?? 1_000_000));
-	const result = indexFile(absolutePath, relativePath, maxFileSizeBytes);
+	const result = indexFile(absolutePath, relativePath, maxFileSizeBytes, options.indexer);
 	if (result) {
 		store.indexFile(relativePath, result.language, result.hash, result.symbols);
 		indexFileContent(relativePath, projectRoot, store);
@@ -424,6 +429,15 @@ export function searchSymbols(
 	return symbols.map((sym) => ({ symbol: sym }));
 }
 
+export interface FetchContextConfig {
+	defaultBefore: number;
+	defaultAfter: number;
+	defaultMaxLines: number;
+	maxLinesCap: number;
+	containerDeclMaxLines: number;
+	signatureDisplayLength: number;
+}
+
 /**
  * Fetch symbol context with asymmetric configurable padding.
  *
@@ -440,9 +454,14 @@ export function fetchContext(
 		after?: number;
 		maxLines?: number;
 	} = {},
+	config?: FetchContextConfig,
 ): FetchContextResult {
-	const { contextFile, before = 5, after = 5, maxLines: rawMax = 100 } = options;
-	const maxLines = Math.min(rawMax, 200); // Hard cap at 200
+	const { contextFile } = options;
+	const before = options.before ?? config?.defaultBefore ?? 5;
+	const after = options.after ?? config?.defaultAfter ?? 5;
+	const maxLinesCap = config?.maxLinesCap ?? 200;
+	const rawMax = options.maxLines ?? config?.defaultMaxLines ?? 100;
+	const maxLines = Math.min(rawMax, maxLinesCap);
 
 	const sym = store.getBestDefinition(name, contextFile);
 	if (!sym) {
@@ -475,7 +494,7 @@ export function fetchContext(
 
 	// Container types get member summary instead of full body
 	if (isContainerKind(sym.kind)) {
-		return buildContainerResult(sym, store, lines, totalLines, maxLines);
+		return buildContainerResult(sym, store, lines, totalLines, maxLines, config);
 	}
 
 	return buildPaddedResult(sym, lines, totalLines, before, after, maxLines);
@@ -495,14 +514,25 @@ function buildContainerResult(
 	lines: string[],
 	totalLines: number,
 	maxLines: number,
+	config?: FetchContextConfig,
 ): FetchContextResult {
+	const containerDeclMaxLines = config?.containerDeclMaxLines ?? 10;
+	const signatureDisplayLength = config?.signatureDisplayLength ?? 80;
+
 	const scopeName = sym.name;
 	const members = store.findMembersOfScope(sym.file, scopeName);
+
+	// If no indexed members, fall back to showing the full body like a regular symbol.
+	// This handles interfaces, type aliases, and enums whose properties aren't
+	// captured by tree-sitter queries.
+	if (members.length === 0) {
+		return buildPaddedResult(sym, lines, totalLines, 0, 0, maxLines);
+	}
 
 	// Declaration lines: from sym.line to first member or endLine (whichever is smaller)
 	const declEnd = members.length > 0
 		? Math.min(members[0].line - 1, sym.endLine)
-		: Math.min(sym.line + 10, sym.endLine); // Up to 10 lines of declaration
+		: Math.min(sym.line + containerDeclMaxLines, sym.endLine);
 
 	const headerLines: string[] = [];
 	for (let i = sym.line - 1; i < declEnd && i < totalLines; i++) {
@@ -513,20 +543,16 @@ function buildContainerResult(
 	content += "━".repeat(40) + "\n";
 	content += headerLines.join("\n") + "\n";
 
-	if (members.length > 0) {
-		content += "\n── Members ──\n";
-		const maxMembers = maxLines - headerLines.length - 5; // Reserve lines for header/separators
-		const shown = members.slice(0, Math.max(maxMembers, 10));
-		for (const m of shown) {
-			const vis = m.visibility ? `[${m.visibility}] ` : "";
-			const sig = m.signature && m.signature.length < 80 ? `  ${m.signature}` : "";
-			content += `  ${m.line} | ${vis}${m.kind} ${m.name}${sig}\n`;
-		}
-		if (members.length > shown.length) {
-			content += `  ... and ${members.length - shown.length} more members\n`;
-		}
-	} else {
-		content += "  (no members indexed)\n";
+	content += "\n── Members ──\n";
+	const maxMembers = maxLines - headerLines.length - 5; // Reserve lines for header/separators
+	const shown = members.slice(0, Math.max(maxMembers, 10));
+	for (const m of shown) {
+		const vis = m.visibility ? `[${m.visibility}] ` : "";
+		const sig = m.signature && m.signature.length < signatureDisplayLength ? `  ${m.signature}` : "";
+		content += `  ${m.line} | ${vis}${m.kind} ${m.name}${sig}\n`;
+	}
+	if (members.length > shown.length) {
+		content += `  ... and ${members.length - shown.length} more members\n`;
 	}
 
 	return {
@@ -627,10 +653,64 @@ export function indexFileContent(
 }
 
 /**
- * Re-index FTS content for stale files. Returns count of re-indexed files.
- * Uses file mtime as a fast filter to avoid reading unchanged files.
+ * Re-index changed files. Returns count of re-indexed files.
+ *
+ * Two modes:
+ * 1. **Dirty-set mode** (dirtySet provided & non-empty): only re-index those files.
+ *    Handles deleted files (path gone from disk → remove from index).
+ * 2. **Mtime scan mode** (no dirty set): iterate all tracked files and check mtime.
+ *    Used as a safety-net fallback when the watcher isn't available.
  */
 export function refreshStaleContent(
+	projectRoot: string,
+	store: Store,
+	signal?: { aborted?: boolean },
+	dirtySet?: Set<string>,
+): number {
+	if (dirtySet && dirtySet.size > 0) {
+		return refreshDirtySet(projectRoot, store, dirtySet, signal);
+	}
+	return refreshByMtime(projectRoot, store, signal);
+}
+
+/** Re-index only the files in the dirty set. */
+function refreshDirtySet(
+	projectRoot: string,
+	store: Store,
+	dirtySet: Set<string>,
+	signal?: { aborted?: boolean },
+): number {
+	let refreshed = 0;
+	for (const relPath of dirtySet) {
+		throwIfCancelled(signal);
+		const fullPath = path.resolve(projectRoot, relPath);
+
+		// Check if file still exists
+		let content: string;
+		try {
+			content = fs.readFileSync(fullPath, "utf8");
+		} catch {
+			// File deleted or inaccessible — remove from index
+			store.deleteFile(relPath);
+			continue;
+		}
+
+		const result = indexFile(fullPath, relPath);
+		if (result) {
+			store.indexFile(relPath, result.language, result.hash, result.symbols);
+			const processed = preprocessForFts(content);
+			store.indexFileContent(relPath, content, processed);
+			refreshed++;
+		} else {
+			// File can no longer be indexed (unsupported language, too large, etc.)
+			store.deleteFile(relPath);
+		}
+	}
+	return refreshed;
+}
+
+/** Re-index tracked files whose mtime is newer than lastIndexedAt. Safety-net fallback. */
+function refreshByMtime(
 	projectRoot: string,
 	store: Store,
 	signal?: { aborted?: boolean },
@@ -736,7 +816,7 @@ export function searchCodebase(
 	}
 
 	// First, refresh any stale content
-	const refreshedFiles = refreshStaleContent(projectRoot, store, options.signal);
+	const refreshedFiles = refreshStaleContent(projectRoot, store, options.signal, options.dirtySet);
 
 	const ftsQuery = escapeFtsQuery(query);
 	if (!ftsQuery) {

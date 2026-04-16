@@ -120,6 +120,30 @@ for (const lang of LANGUAGES) {
 	}
 }
 
+/** Set of currently enabled language names. null = all enabled. */
+let enabledLanguages: Set<string> | null = null;
+
+/**
+ * Restrict which languages are considered active.
+ * Affects `getSupportedExtensions()` (used by fullIndex file walking)
+ * and `detectLanguage()` for indexing purposes.
+ * `detectLanguage()` still returns the LanguageDef for disabled languages
+ * when called directly (e.g., for re-indexing existing files).
+ */
+export function setEnabledLanguages(names: string[]): void {
+	if (names.length === ALL_LANGUAGE_NAMES_REF.length) {
+		// Check if it's all languages (common case = no filter)
+		const allPresent = ALL_LANGUAGE_NAMES_REF.every(n => names.includes(n));
+		if (allPresent) {
+			enabledLanguages = null;
+			return;
+		}
+	}
+	enabledLanguages = new Set(names);
+}
+
+const ALL_LANGUAGE_NAMES_REF = LANGUAGES.map(l => l.name);
+
 /**
  * Detect language from a file path. Returns undefined if not supported.
  */
@@ -128,9 +152,14 @@ export function detectLanguage(filePath: string): LanguageDef | undefined {
 	return extensionMap.get(ext);
 }
 
-/** Get all supported file extensions */
+/** Get all supported file extensions (filtered by enabled languages). */
 export function getSupportedExtensions(): string[] {
-	return [...extensionMap.keys()];
+	if (!enabledLanguages) return [...extensionMap.keys()];
+	const result: string[] = [];
+	for (const [ext, lang] of extensionMap) {
+		if (enabledLanguages.has(lang.name)) result.push(ext);
+	}
+	return result;
 }
 
 /** All language definitions */
@@ -150,6 +179,7 @@ const languageCache = new Map<string, { lang: Language; queries: Map<string, Ins
  */
 export async function initParser(
 	extDir: string,
+	enabledLangs?: string[],
 ): Promise<WasmParser> {
 	const { Parser, Language, Query: Q } = await import("web-tree-sitter");
 	await Parser.init();
@@ -158,8 +188,12 @@ export async function initParser(
 	parserInstance = parser;
 	QueryClass = Q;
 
-	// Pre-load all languages
+	// Determine which languages to load
+	const enabledSet = enabledLangs ? new Set(enabledLangs) : null;
+
+	// Pre-load all enabled languages
 	for (const langDef of LANGUAGES) {
+		if (enabledSet && !enabledSet.has(langDef.name)) continue;
 		const wasmPath = path.resolve(extDir, "node_modules", langDef.package, langDef.wasmFile);
 		try {
 			const lang = await Language.load(wasmPath);
