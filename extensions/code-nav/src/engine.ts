@@ -134,6 +134,8 @@ export interface SearchCodebaseOptions {
 	maxLinesScanned?: number;
 	/** Optional cancellation signal for long-running searches. */
 	signal?: { aborted?: boolean };
+	/** Set of dirty file paths from the watcher. If provided, only these files are re-indexed. */
+	dirtySet?: Set<string>;
 }
 
 export interface FullIndexOptions {
@@ -651,10 +653,64 @@ export function indexFileContent(
 }
 
 /**
- * Re-index FTS content for stale files. Returns count of re-indexed files.
- * Uses file mtime as a fast filter to avoid reading unchanged files.
+ * Re-index changed files. Returns count of re-indexed files.
+ *
+ * Two modes:
+ * 1. **Dirty-set mode** (dirtySet provided & non-empty): only re-index those files.
+ *    Handles deleted files (path gone from disk → remove from index).
+ * 2. **Mtime scan mode** (no dirty set): iterate all tracked files and check mtime.
+ *    Used as a safety-net fallback when the watcher isn't available.
  */
 export function refreshStaleContent(
+	projectRoot: string,
+	store: Store,
+	signal?: { aborted?: boolean },
+	dirtySet?: Set<string>,
+): number {
+	if (dirtySet && dirtySet.size > 0) {
+		return refreshDirtySet(projectRoot, store, dirtySet, signal);
+	}
+	return refreshByMtime(projectRoot, store, signal);
+}
+
+/** Re-index only the files in the dirty set. */
+function refreshDirtySet(
+	projectRoot: string,
+	store: Store,
+	dirtySet: Set<string>,
+	signal?: { aborted?: boolean },
+): number {
+	let refreshed = 0;
+	for (const relPath of dirtySet) {
+		throwIfCancelled(signal);
+		const fullPath = path.resolve(projectRoot, relPath);
+
+		// Check if file still exists
+		let content: string;
+		try {
+			content = fs.readFileSync(fullPath, "utf8");
+		} catch {
+			// File deleted or inaccessible — remove from index
+			store.deleteFile(relPath);
+			continue;
+		}
+
+		const result = indexFile(fullPath, relPath);
+		if (result) {
+			store.indexFile(relPath, result.language, result.hash, result.symbols);
+			const processed = preprocessForFts(content);
+			store.indexFileContent(relPath, content, processed);
+			refreshed++;
+		} else {
+			// File can no longer be indexed (unsupported language, too large, etc.)
+			store.deleteFile(relPath);
+		}
+	}
+	return refreshed;
+}
+
+/** Re-index tracked files whose mtime is newer than lastIndexedAt. Safety-net fallback. */
+function refreshByMtime(
 	projectRoot: string,
 	store: Store,
 	signal?: { aborted?: boolean },
@@ -760,7 +816,7 @@ export function searchCodebase(
 	}
 
 	// First, refresh any stale content
-	const refreshedFiles = refreshStaleContent(projectRoot, store, options.signal);
+	const refreshedFiles = refreshStaleContent(projectRoot, store, options.signal, options.dirtySet);
 
 	const ftsQuery = escapeFtsQuery(query);
 	if (!ftsQuery) {

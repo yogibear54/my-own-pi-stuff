@@ -5,6 +5,8 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { Store } from "./store.js";
 import type { CodeNavToolsConfig } from "./config.js";
+import type { WatcherHandle } from "./watcher.js";
+import { refreshStaleContent } from "./engine.js";
 
 interface IndexingPolicyDetails {
 	includeHiddenPaths: boolean;
@@ -40,8 +42,16 @@ export function registerTools(
 	getStore: () => Store | undefined,
 	getRoot: () => string,
 	getConfig: () => CodeNavToolsConfig,
+	getWatcher?: () => WatcherHandle | undefined,
 ) {
-	// Tool: Find definition
+	/** Drain dirty files from watcher and re-index them synchronously. */
+	function refreshDirty(store: Store, root: string): void {
+		const w = getWatcher?.();
+		const dirty = w?.drainDirty();
+		if (!dirty || dirty.size === 0) return;
+		const count = refreshStaleContent(root, store, undefined, dirty);
+		w?.addRefresh(count);
+	}	// Tool: Find definition
 	pi.registerTool({
 		name: "code_nav_definition",
 		label: "Go to Definition",
@@ -76,6 +86,7 @@ export function registerTools(
 			}
 
 			const root = getRoot();
+			refreshDirty(store, root);
 			const results = await import("./engine.js").then((e) =>
 				e.findDefinitions(params.symbol, params.file, store, root),
 			);
@@ -158,6 +169,7 @@ export function registerTools(
 			}
 
 			const root = getRoot();
+			refreshDirty(store, root);
 			const results = await import("./engine.js").then((e) =>
 				e.findReferences(params.symbol, params.definitionFile, store, root, signal),
 			);
@@ -247,6 +259,8 @@ export function registerTools(
 			if (!store) {
 				throw new Error("[code-nav] Index not initialized. Try again in a moment.");
 			}
+
+			refreshDirty(store, getRoot());
 
 			if (params.file) {
 				// File outline
@@ -384,6 +398,7 @@ export function registerTools(
 			}
 
 			const root = getRoot();
+			refreshDirty(store, root);
 			const config = getConfig();
 			const result = await import("./engine.js").then((e) =>
 				e.fetchContext(params.symbol, store, root, {
@@ -475,14 +490,17 @@ export function registerTools(
 			const root = getRoot();
 			const config = getConfig();
 			const limit = params.limit ?? config.tools.searchDefaultLimit;
+			const dirty = getWatcher?.()?.drainDirty();
 			const { results, totalMatches, totalFilesMatched, truncated, stats } = await import("./engine.js").then((e) =>
 				e.searchCodebase(params.query, store, root, limit, {
 					scanMultiplier: params.scanMultiplier ?? config.search.defaultScanMultiplier,
 					maxCandidateFiles: params.maxCandidateFiles ?? config.search.defaultMaxCandidateFiles,
 					maxLinesScanned: params.maxLinesScanned ?? config.search.defaultMaxLinesScanned ?? undefined,
 					signal,
+					dirtySet: dirty,
 				}),
 			);
+			if (dirty && dirty.size > 0) getWatcher?.()?.addRefresh(stats.refreshedFiles);
 
 			if (results.length === 0) {
 				const emptyQuery = !params.query || !params.query.trim();

@@ -15,6 +15,7 @@ import type { FullIndexOptions } from "./src/engine.js";
 import { resolveToolsConfig } from "./src/config.js";
 import type { CodeNavToolsConfig } from "./src/config.js";
 import { registerTools } from "./src/tools.js";
+import { startWatcher, type WatcherHandle } from "./src/watcher.js";
 
 /** Code-nav tool names (used to enable/disable as a group). */
 const CODE_NAV_TOOLS = [
@@ -115,6 +116,7 @@ function resolveAndStoreConfig(cwd: string): CodeNavToolsConfig {
 export default function (pi: ExtensionAPI) {
 	let store: Store | undefined;
 	let projectRoot: string;
+	let watcher: WatcherHandle | undefined;
 
 	// Resolve this extension's directory for WASM loading
 	const extDir = path.resolve(__dirname);
@@ -122,6 +124,7 @@ export default function (pi: ExtensionAPI) {
 	// Shared state getters for tools
 	const getStore = () => store;
 	const getRoot = () => projectRoot;
+	const getWatcher = () => watcher;
 	const getConfig = (): CodeNavToolsConfig => {
 		const raw = store?.getMeta("toolsConfig");
 		if (raw) {
@@ -134,7 +137,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	// Register tools
-	registerTools(pi, getStore, getRoot, getConfig);
+	registerTools(pi, getStore, getRoot, getConfig, getWatcher);
 
 	/**
 	 * Backfill any missing FTS content rows for tracked files.
@@ -248,6 +251,10 @@ export default function (pi: ExtensionAPI) {
 				"indexer:",
 				`  minNameLength: ${toolsConfig.indexer.minNameLength}`,
 				`  maxSignatureLength: ${toolsConfig.indexer.maxSignatureLength}`,
+				"watcher:",
+				`  active: ${watcher ? "true" : "false"}`,
+				`  dirtyFiles: ${watcher?.dirtyCount() ?? 0}`,
+				`  filesRefreshed: ${watcher?.refreshCount() ?? 0}`,
 				"raw codeNav settings:",
 				JSON.stringify(settings, null, 2),
 			];
@@ -348,10 +355,23 @@ export default function (pi: ExtensionAPI) {
 				}, 0);
 			}
 		}
+
+		// Start file watcher for lazy invalidation
+		const { getSupportedExtensions } = await import("./src/languages/registry.js");
+		const extensions = new Set(getSupportedExtensions());
+		const indexOpts = JSON.parse(store.getMeta("indexOptions") || "{}");
+		const excludedDirs = new Set<string>(
+			Array.isArray(indexOpts.excludedDirectories)
+				? indexOpts.excludedDirectories
+				: ["node_modules", "vendor", "dist", "build", ".git", ".pi", "__pycache__"],
+		);
+		watcher = startWatcher(ctx.cwd, { excludedDirs, extensions });
 	});
 
 	// Cleanup on shutdown
 	pi.on("session_shutdown", async () => {
+		watcher?.stop();
+		watcher = undefined;
 		store?.close();
 		store = undefined;
 	});
