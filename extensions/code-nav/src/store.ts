@@ -151,7 +151,14 @@ export class Store {
 
 	constructor(dbPath: string, dbConfig?: DatabaseConfig) {
 		// Ensure directory exists
-		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+		const dbDir = path.dirname(dbPath);
+		fs.mkdirSync(dbDir, { recursive: true });
+
+		// Add .gitignore to keep index.db out of version control
+		const gitignorePath = path.join(dbDir, ".gitignore");
+		if (!fs.existsSync(gitignorePath)) {
+			fs.writeFileSync(gitignorePath, "index.db\n");
+		}
 
 		const journalMode = dbConfig?.journalMode ?? "WAL";
 		const synchronous = dbConfig?.synchronous ?? "NORMAL";
