@@ -154,10 +154,17 @@ export class Store {
 		const dbDir = path.dirname(dbPath);
 		fs.mkdirSync(dbDir, { recursive: true });
 
-		// Add .gitignore to keep index.db out of version control
+		// Add .gitignore to keep the database and WAL sidecars out of version control
 		const gitignorePath = path.join(dbDir, ".gitignore");
+		const gitignoreEntries = ["index.db", "index.db-shm", "index.db-wal"];
 		if (!fs.existsSync(gitignorePath)) {
-			fs.writeFileSync(gitignorePath, "index.db\n");
+			fs.writeFileSync(gitignorePath, gitignoreEntries.join("\n") + "\n");
+		} else {
+			const existing = fs.readFileSync(gitignorePath, "utf8");
+			const missing = gitignoreEntries.filter((e) => !existing.includes(e));
+			if (missing.length > 0) {
+				fs.appendFileSync(gitignorePath, missing.join("\n") + "\n");
+			}
 		}
 
 		const journalMode = dbConfig?.journalMode ?? "WAL";

@@ -3,5 +3,6 @@ settings.json
 models.json
 sessions/
 node_modules/
+index.db
 index.db-shm
 index.db-wal
