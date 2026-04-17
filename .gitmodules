@@ -1,0 +1,3 @@
+[submodule "extensions/diff-review"]
+	path = extensions/diff-review
+	url = git@github.com:yogibear54/pi-diff-review.git
