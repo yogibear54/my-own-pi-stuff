@@ -10,6 +10,7 @@
 		"code_nav_symbols",
 		"code_nav_fetch_context",
 		"code_nav_search",
-		"read"
+		"read",
+		"balance_sheet"
 	]
 }

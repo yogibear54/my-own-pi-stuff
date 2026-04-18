@@ -266,7 +266,7 @@ Disable caching for fresh extractions:
 | `--async` | Use async pipeline | `false` |
 | `--async-rps` | Async requests per second | `8.0` |
 | `--pretty` | Pretty-print JSON | `false` |
-| `--output FILE` | Output file path | stdout |
+| `--write FILE` | Output file path | stdout |
 | `--per-page` | Per-page output files (markdown/html) | `false` |
 | `--stop-on-error` | Stop batch on first error | `false` |
 

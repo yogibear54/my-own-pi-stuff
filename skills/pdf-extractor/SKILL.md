@@ -33,7 +33,7 @@ The extraction mode to use:
 | `html` | Converts pages to HTML with styling |
 | `prompt` | Custom prompt for flexible extraction |
 
-### Question 2: `--output` (required — select one)
+### Question 2: `--write` (required — select one)
 
 The output format:
 
@@ -82,14 +82,14 @@ Once all values are gathered, construct and run the command:
 ```bash
 /home/yogibear54/.pi/agent/skills/pdf-extractor/scripts/extract.py <pdf_path> \
   --mode <mode> \
-  [--output <format>] \
+  [--write <format>] \
   [--image-max-long-edge <N>] \
   [--dpi <N>] \
   [--per-page] \
   [<additional flags>]
 ```
 
-- Omit `--output` if the user chose the default (no flag).
+- Omit `--write` if the user chose the default (no flag).
 - Omit `--image-max-long-edge` if the user didn't specify a value.
 - Omit `--dpi` if the user didn't specify a value.
 - Omit `--per-page` if the user chose no.
