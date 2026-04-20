@@ -12,6 +12,19 @@ import { getSupportedExtensions } from "./languages/registry.js";
 const CAMEL_SPLIT_RE = /([a-z])([A-Z])/g;
 
 /**
+ * Parse a dotted symbol name like "ClassName.method_name" into separate
+ * scope and name components. Returns `{ name, scope }` where scope may be
+ * undefined if there's no dot.
+ */
+export function parseDottedName(raw: string): { name: string; scope: string | undefined } {
+	const dotIndex = raw.lastIndexOf(".");
+	if (dotIndex > 0 && dotIndex < raw.length - 1) {
+		return { scope: raw.substring(0, dotIndex), name: raw.substring(dotIndex + 1) };
+	}
+	return { name: raw, scope: undefined };
+}
+
+/**
  * Pre-process source content for FTS5.
  *
  * We index both the original text and a camelCase/PascalCase-split variant.
@@ -298,7 +311,10 @@ export function findDefinitions(
 	store: Store,
 	projectRoot: string,
 ): DefinitionResult[] {
-	const all = store.findDefinitions(name);
+	const { name: symbolName, scope } = parseDottedName(name);
+	const all = scope
+		? store.findDefinitionsInScope(symbolName, scope)
+		: store.findDefinitions(symbolName);
 	if (all.length === 0) return [];
 
 	// Sort by relevance
@@ -346,12 +362,17 @@ export function findReferences(
 	signal?: { aborted?: boolean },
 ): ReferenceResult[] {
 	const results: ReferenceResult[] = [];
-	const symbolRegex = new RegExp(`\\b${escapeRegex(name)}\\b`);
+	const { name: symbolName, scope } = parseDottedName(name);
+	// For references, we search for the short name (e.g., "_validate_pdf_path")
+	// not the dotted name, since references use the short identifier.
+	const symbolRegex = new RegExp(`\\b${escapeRegex(symbolName)}\\b`);
 
 	// Resolve definition file if not provided
 	let resolvedDefFile = definitionFile;
 	if (!resolvedDefFile) {
-		const defs = store.findDefinitions(name);
+		const defs = scope
+			? store.findDefinitionsInScope(symbolName, scope)
+			: store.findDefinitions(symbolName);
 		if (defs.length > 0) {
 			// Pick the best candidate: prefer classes/functions over variables
 			resolvedDefFile = defs[0].file;
@@ -360,7 +381,7 @@ export function findReferences(
 
 	const definitionLines = new Set<number>();
 	if (resolvedDefFile) {
-		for (const sym of store.findDefinitionsInFile(name, resolvedDefFile)) {
+		for (const sym of store.findDefinitionsInFile(symbolName, resolvedDefFile)) {
 			definitionLines.add(sym.line);
 		}
 	}
@@ -386,7 +407,7 @@ export function findReferences(
 		const fullPath = path.resolve(projectRoot, relPath);
 		try {
 			const content = fs.readFileSync(fullPath, "utf8");
-			if (!content.includes(name)) continue;
+			if (!content.includes(symbolName)) continue;
 			const lines = content.split("\n");
 			const isDefinitionFile = !!resolvedDefFile && relPath === resolvedDefFile;
 			const isImportingFile = candidateFiles ? candidateFiles.has(relPath) && !isDefinitionFile : false;
@@ -394,10 +415,10 @@ export function findReferences(
 			for (let i = 0; i < lines.length; i++) {
 				if ((i & 255) === 0) throwIfCancelled(signal);
 				const line = lines[i];
-				if (!line.includes(name)) continue;
+				if (!line.includes(symbolName)) continue;
 				if (!symbolRegex.test(line)) continue;
 
-				const col = line.indexOf(name);
+				const col = line.indexOf(symbolName);
 				if (col === -1) continue;
 				const lineNum = i + 1;
 				const isDef = isDefinitionFile && definitionLines.has(lineNum);
@@ -435,16 +456,16 @@ export function findReferences(
 			const fullPath = path.resolve(projectRoot, relPath);
 			try {
 				const content = fs.readFileSync(fullPath, "utf8");
-				if (!content.includes(name)) continue;
+				if (!content.includes(symbolName)) continue;
 				const lines = content.split("\n");
 
 				for (let i = 0; i < lines.length; i++) {
 					if ((i & 255) === 0) throwIfCancelled(signal);
 					const line = lines[i];
-					if (!line.includes(name)) continue;
+					if (!line.includes(symbolName)) continue;
 					if (!symbolRegex.test(line)) continue;
 
-					const col = line.indexOf(name);
+					const col = line.indexOf(symbolName);
 					if (col === -1) continue;
 
 					results.push({
@@ -536,7 +557,8 @@ export function fetchContext(
 	const rawMax = options.maxLines ?? config?.defaultMaxLines ?? 100;
 	const maxLines = Math.min(rawMax, maxLinesCap);
 
-	const sym = store.getBestDefinition(name, contextFile);
+	const { name: symbolName, scope } = parseDottedName(name);
+	const sym = store.getBestDefinition(symbolName, contextFile, scope);
 	if (!sym) {
 		return {
 			file: "",

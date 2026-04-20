@@ -16,6 +16,7 @@ import {
 	searchSymbols,
 	fetchContext,
 	searchCodebase,
+	parseDottedName,
 } from "../src/engine.js";
 
 // ── Fixture files ──
@@ -159,6 +160,21 @@ describe("engine integration", () => {
 			expect(results.length).toBeGreaterThanOrEqual(1);
 			expect(results[0].symbol.file).toContain("utils.ts");
 		});
+
+		it("finds method by dotted name (Class.method)", () => {
+			const { store: s, root: r } = setup();
+			const results = findDefinitions("Calculator.add", undefined, s, r);
+			expect(results.length).toBeGreaterThanOrEqual(1);
+			expect(results[0].symbol.name).toBe("add");
+			expect(results[0].symbol.kind).toBe("method");
+			expect(results[0].symbol.scope).toBe("Calculator");
+		});
+
+		it("returns empty for dotted name with wrong scope", () => {
+			const { store: s, root: r } = setup();
+			const results = findDefinitions("Nonexistent.add", undefined, s, r);
+			expect(results).toHaveLength(0);
+		});
 	});
 
 	// ── findReferences ──
@@ -192,6 +208,14 @@ describe("engine integration", () => {
 			const { store: s, root: r } = setup();
 			const results = findReferences("nonexistent_xyz", undefined, s, r);
 			expect(results).toHaveLength(0);
+		});
+
+		it("finds references by dotted name (Class.method)", () => {
+			const { store: s, root: r } = setup();
+			const results = findReferences("Calculator.add", undefined, s, r);
+			expect(results.length).toBeGreaterThanOrEqual(1);
+			// Should find "add" references
+			expect(results.some((r) => r.lineText.includes("add"))).toBe(true);
 		});
 	});
 
@@ -292,6 +316,20 @@ describe("engine integration", () => {
 			expect(result.content).toContain("No definition found");
 		});
 
+		it("fetches context by dotted name (Class.method)", () => {
+			const { store: s, root: r } = setup();
+			const result = fetchContext("Calculator.add", s, r, { contextFile: "src/utils.ts" });
+			expect(result.content).toContain("add");
+			expect(result.content).toContain("this.value");
+			expect(result.file).toContain("utils.ts");
+		});
+
+		it("returns not-found for dotted name with wrong scope", () => {
+			const { store: s, root: r } = setup();
+			const result = fetchContext("Nonexistent.add", s, r, {});
+			expect(result.content).toContain("No definition found");
+		});
+
 		it("fetches context for a nested file symbol", () => {
 			const { store: s, root: r } = setup();
 			const result = fetchContext("deepFunction", s, r, {});
@@ -341,6 +379,40 @@ describe("engine integration", () => {
 			expect(stats).toHaveProperty("candidateFiles");
 			expect(stats).toHaveProperty("totalMs");
 			expect(typeof stats.totalMs).toBe("number");
+		});
+	});
+
+	// ── parseDottedName ──
+
+	describe("parseDottedName", () => {
+		it("parses Class.method", () => {
+			const { name, scope } = parseDottedName("PDFExtractor._validate_pdf_path");
+			expect(name).toBe("_validate_pdf_path");
+			expect(scope).toBe("PDFExtractor");
+		});
+
+		it("parses nested scope (Module.Class.method)", () => {
+			const { name, scope } = parseDottedName("Module.Class.method");
+			expect(name).toBe("method");
+			expect(scope).toBe("Module.Class");
+		});
+
+		it("returns no scope for plain name", () => {
+			const { name, scope } = parseDottedName("greet");
+			expect(name).toBe("greet");
+			expect(scope).toBeUndefined();
+		});
+
+		it("handles trailing dot gracefully", () => {
+			const { name, scope } = parseDottedName("foo.");
+			expect(name).toBe("foo.");
+			expect(scope).toBeUndefined();
+		});
+
+		it("handles leading dot gracefully", () => {
+			const { name, scope } = parseDottedName(".foo");
+			expect(name).toBe(".foo");
+			expect(scope).toBeUndefined();
 		});
 	});
 });

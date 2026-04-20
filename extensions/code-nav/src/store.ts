@@ -171,6 +171,9 @@ export class Store {
 		findByNameAndFile: Database.Statement;
 		findByNameAndFileBest: Database.Statement;
 		findBestDefinition: Database.Statement;
+		findByNameAndScope: Database.Statement;
+		findByNameAndScopeAndFile: Database.Statement;
+		findBestDefinitionScoped: Database.Statement;
 		findMembersOfScope: Database.Statement;
 		findByFile: Database.Statement;
 		findByKind: Database.Statement;
@@ -268,6 +271,18 @@ export class Store {
 
 			findBestDefinition: this.db.prepare(
 				"SELECT * FROM symbols WHERE name = ? ORDER BY kind, file, line LIMIT 1",
+			),
+
+			findByNameAndScope: this.db.prepare(
+				"SELECT * FROM symbols WHERE name = ? AND scope = ? ORDER BY kind, file, line",
+			),
+
+			findByNameAndScopeAndFile: this.db.prepare(
+				"SELECT * FROM symbols WHERE name = ? AND scope = ? AND file = ? ORDER BY line LIMIT 1",
+			),
+
+			findBestDefinitionScoped: this.db.prepare(
+				"SELECT * FROM symbols WHERE name = ? AND scope = ? ORDER BY kind, file, line LIMIT 1",
 			),
 
 			findMembersOfScope: this.db.prepare(
@@ -488,6 +503,10 @@ export class Store {
 		return toSymbolRecords(this.stmts.findByName.all(name));
 	}
 
+	findDefinitionsInScope(name: string, scope: string): SymbolRecord[] {
+		return toSymbolRecords(this.stmts.findByNameAndScope.all(name, scope));
+	}
+
 	findDefinitionsInFile(name: string, file: string): SymbolRecord[] {
 		return toSymbolRecords(this.stmts.findByNameAndFile.all(name, file));
 	}
@@ -519,8 +538,17 @@ export class Store {
 	/**
 	 * Get the best-matching symbol definition for fetch_context.
 	 * Prefers same-file matches, then falls back to best match.
+	 * Supports dotted names like "ClassName.method" by using scope.
 	 */
-	getBestDefinition(name: string, contextFile?: string): SymbolRecord | undefined {
+	getBestDefinition(name: string, contextFile?: string, scope?: string): SymbolRecord | undefined {
+		if (scope) {
+			if (contextFile) {
+				const sameFile = toSymbolRecords(this.stmts.findByNameAndScopeAndFile.all(name, scope, contextFile));
+				if (sameFile.length > 0) return sameFile[0];
+			}
+			const rows = toSymbolRecords(this.stmts.findBestDefinitionScoped.all(name, scope));
+			return rows[0];
+		}
 		if (contextFile) {
 			const sameFile = toSymbolRecords(this.stmts.findByNameAndFileBest.all(name, contextFile));
 			if (sameFile.length > 0) return sameFile[0];
