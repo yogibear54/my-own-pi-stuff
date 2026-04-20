@@ -49,6 +49,35 @@ function toSymbolRecords(rows: any[]): SymbolRecord[] {
 	return rows.map(toSymbolRecord);
 }
 
+export interface EdgeRecord {
+	id: number;
+	sourceFile: string;
+	sourceSymbol: string | null;
+	targetFile: string | null;
+	targetSymbol: string | null;
+	relationship: string; // 'imports', 're_exports', 'extends', 'implements'
+	line: number;
+	rawSource: string | null; // original import path string (e.g., "./utils")
+}
+
+/** Map a raw DB row to an EdgeRecord. */
+function toEdgeRecord(row: any): EdgeRecord {
+	return {
+		id: row.id,
+		sourceFile: row.source_file,
+		sourceSymbol: row.source_symbol,
+		targetFile: row.target_file,
+		targetSymbol: row.target_symbol,
+		relationship: row.relationship,
+		line: row.line,
+		rawSource: row.raw_source,
+	};
+}
+
+function toEdgeRecords(rows: any[]): EdgeRecord[] {
+	return rows.map(toEdgeRecord);
+}
+
 export interface FileRecord {
 	path: string;
 	language: string;
@@ -113,6 +142,22 @@ CREATE TABLE IF NOT EXISTS content_lines (
 );
 
 CREATE INDEX IF NOT EXISTS idx_content_lines_path ON content_lines(path);
+
+CREATE TABLE IF NOT EXISTS edges (
+  id INTEGER PRIMARY KEY,
+  source_file TEXT NOT NULL,
+  source_symbol TEXT,
+  target_file TEXT,
+  target_symbol TEXT,
+  relationship TEXT NOT NULL,
+  line INTEGER NOT NULL,
+  raw_source TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_edges_source_file ON edges(source_file);
+CREATE INDEX IF NOT EXISTS idx_edges_target_file ON edges(target_file);
+CREATE INDEX IF NOT EXISTS idx_edges_target_symbol ON edges(target_symbol, relationship);
+CREATE INDEX IF NOT EXISTS idx_edges_source_symbol ON edges(source_file, source_symbol);
 `;
 
 export class Store {
@@ -147,6 +192,13 @@ export class Store {
 		getLineByOffset: Database.Statement;
 		getStaleFiles: Database.Statement;
 		getAllFilesWithMeta: Database.Statement;
+		insertEdge: Database.Statement;
+		deleteEdgesByFile: Database.Statement;
+		findEdgesBySourceFile: Database.Statement;
+		findEdgesByTargetFile: Database.Statement;
+		findEdgesByTargetSymbol: Database.Statement;
+		findEdgesBySourceFileAndSymbol: Database.Statement;
+		findEdgesByTargetFileAndRel: Database.Statement;
 	};
 
 	constructor(dbPath: string, dbConfig?: DatabaseConfig) {
@@ -308,6 +360,35 @@ export class Store {
 			countByName: this.db.prepare(
 				"SELECT COUNT(*) as count FROM symbols WHERE name = ?",
 			),
+
+			insertEdge: this.db.prepare(`
+				INSERT INTO edges (source_file, source_symbol, target_file, target_symbol, relationship, line, raw_source)
+				VALUES (?, ?, ?, ?, ?, ?, ?)
+			`),
+
+			deleteEdgesByFile: this.db.prepare(
+				"DELETE FROM edges WHERE source_file = ?",
+			),
+
+			findEdgesBySourceFile: this.db.prepare(
+				"SELECT * FROM edges WHERE source_file = ? ORDER BY line",
+			),
+
+			findEdgesByTargetFile: this.db.prepare(
+				"SELECT * FROM edges WHERE target_file = ? ORDER BY source_file, line",
+			),
+
+			findEdgesByTargetSymbol: this.db.prepare(
+				"SELECT * FROM edges WHERE target_symbol = ? AND relationship = ? ORDER BY source_file, line",
+			),
+
+			findEdgesBySourceFileAndSymbol: this.db.prepare(
+				"SELECT * FROM edges WHERE source_file = ? AND source_symbol = ? ORDER BY line",
+			),
+
+			findEdgesByTargetFileAndRel: this.db.prepare(
+				"SELECT * FROM edges WHERE target_file = ? AND relationship = ? ORDER BY source_file, line",
+			),
 		};
 	}
 
@@ -330,6 +411,7 @@ export class Store {
 
 	deleteFile(filePath: string) {
 		this.stmts.deleteSymbolsByFile.run(filePath);
+		this.stmts.deleteEdgesByFile.run(filePath);
 		this.stmts.deleteFtsByFile.run(filePath);
 		this.stmts.deleteContentLinesByFile.run(filePath);
 		this.stmts.deleteFile.run(filePath);
@@ -339,7 +421,7 @@ export class Store {
 	 * Clear all indexed data (symbols, files, content, meta).
 	 */
 	clearAll() {
-		this.db.exec("DELETE FROM symbols; DELETE FROM files; DELETE FROM content_fts; DELETE FROM content_lines; DELETE FROM meta;");
+		this.db.exec("DELETE FROM symbols; DELETE FROM edges; DELETE FROM files; DELETE FROM content_fts; DELETE FROM content_lines; DELETE FROM meta;");
 	}
 
 	getFile(filePath: string): FileRecord | undefined {
@@ -357,7 +439,7 @@ export class Store {
 	// ---- Symbol operations ----
 
 	/**
-	 * Replace all symbols for a file within a transaction.
+	 * Replace all symbols and edges for a file within a transaction.
 	 * Calls `upsertFile` internally.
 	 */
 	indexFile(
@@ -365,9 +447,11 @@ export class Store {
 		language: string,
 		hash: string,
 		symbols: Omit<SymbolRecord, "id">[],
+		edges?: Omit<EdgeRecord, "id">[],
 	) {
 		const tx = this.db.transaction(() => {
 			this.stmts.deleteSymbolsByFile.run(filePath);
+			this.stmts.deleteEdgesByFile.run(filePath);
 			for (const sym of symbols) {
 				this.stmts.insertSymbol.run(
 					sym.file,
@@ -382,6 +466,17 @@ export class Store {
 					sym.visibility,
 					sym.documentation,
 					sym.parentId,
+				);
+			}
+			for (const edge of (edges ?? [])) {
+				this.stmts.insertEdge.run(
+					edge.sourceFile,
+					edge.sourceSymbol,
+					edge.targetFile,
+					edge.targetSymbol,
+					edge.relationship,
+					edge.line,
+					edge.rawSource,
 				);
 			}
 			this.upsertFile({ path: filePath, language, hash, symbolCount: symbols.length });
@@ -439,6 +534,33 @@ export class Store {
 	 */
 	findMembersOfScope(file: string, scope: string): SymbolRecord[] {
 		return toSymbolRecords(this.stmts.findMembersOfScope.all(file, scope));
+	}
+
+	// ---- Edge operations ----
+
+	/** Find all edges originating from a source file (what it depends on). */
+	findEdgesFromSource(sourceFile: string): EdgeRecord[] {
+		return toEdgeRecords(this.stmts.findEdgesBySourceFile.all(sourceFile));
+	}
+
+	/** Find all edges targeting a file (who depends on it). */
+	findEdgesToTarget(targetFile: string): EdgeRecord[] {
+		return toEdgeRecords(this.stmts.findEdgesByTargetFile.all(targetFile));
+	}
+
+	/** Find edges targeting a specific symbol name with a given relationship (e.g., "extends BaseService"). */
+	findEdgesToSymbol(targetSymbol: string, relationship: string): EdgeRecord[] {
+		return toEdgeRecords(this.stmts.findEdgesByTargetSymbol.all(targetSymbol, relationship));
+	}
+
+	/** Find edges from a file for a specific source symbol (e.g., class X extends/implements). */
+	findEdgesFromSourceSymbol(sourceFile: string, sourceSymbol: string): EdgeRecord[] {
+		return toEdgeRecords(this.stmts.findEdgesBySourceFileAndSymbol.all(sourceFile, sourceSymbol));
+	}
+
+	/** Find edges targeting a file filtered by relationship type. */
+	findEdgesToTargetByRel(targetFile: string, relationship: string): EdgeRecord[] {
+		return toEdgeRecords(this.stmts.findEdgesByTargetFileAndRel.all(targetFile, relationship));
 	}
 
 	// ---- FTS operations ----

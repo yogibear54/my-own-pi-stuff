@@ -231,9 +231,9 @@ export function fullIndex(
 				}
 
 				if (needsIndex) {
-					const result = indexFile(fullPath, relativePath, maxFileSizeBytes, options.indexer);
+					const result = indexFile(fullPath, relativePath, maxFileSizeBytes, options.indexer, projectRoot);
 					if (result) {
-						store.indexFile(relativePath, result.language, result.hash, result.symbols);
+						store.indexFile(relativePath, result.language, result.hash, result.symbols, result.edges);
 						indexFileContent(relativePath, projectRoot, store);
 						indexed++;
 					} else {
@@ -280,9 +280,9 @@ export function reindexFile(
 ): boolean {
 	const relativePath = path.relative(relativeTo, absolutePath);
 	const maxFileSizeBytes = Math.max(10_000, Math.floor(options.maxFileSizeBytes ?? 1_000_000));
-	const result = indexFile(absolutePath, relativePath, maxFileSizeBytes, options.indexer);
+	const result = indexFile(absolutePath, relativePath, maxFileSizeBytes, options.indexer, projectRoot);
 	if (result) {
-		store.indexFile(relativePath, result.language, result.hash, result.symbols);
+		store.indexFile(relativePath, result.language, result.hash, result.symbols, result.edges);
 		indexFileContent(relativePath, projectRoot, store);
 		return true;
 	}
@@ -348,25 +348,48 @@ export function findReferences(
 	const results: ReferenceResult[] = [];
 	const symbolRegex = new RegExp(`\\b${escapeRegex(name)}\\b`);
 
+	// Resolve definition file if not provided
+	let resolvedDefFile = definitionFile;
+	if (!resolvedDefFile) {
+		const defs = store.findDefinitions(name);
+		if (defs.length > 0) {
+			// Pick the best candidate: prefer classes/functions over variables
+			resolvedDefFile = defs[0].file;
+		}
+	}
+
 	const definitionLines = new Set<number>();
-	if (definitionFile) {
-		for (const sym of store.findDefinitionsInFile(name, definitionFile)) {
+	if (resolvedDefFile) {
+		for (const sym of store.findDefinitionsInFile(name, resolvedDefFile)) {
 			definitionLines.add(sym.line);
 		}
 	}
 
-	// We need to grep for the name in all indexed files
-	// For now, use a pragmatic approach: search file contents for the identifier
+	// Build candidate file set using import edges for smarter filtering
+	let candidateFiles: Set<string> | null = null;
+	if (resolvedDefFile) {
+		const importingFiles = getImportingFiles(resolvedDefFile, store);
+		if (importingFiles.size > 0) {
+			// Only search: definition file + files that import from it
+			candidateFiles = new Set([...importingFiles, resolvedDefFile]);
+		}
+	}
+
 	const allIndexedFiles = store.getAllFiles();
 
 	for (const { path: relPath } of allIndexedFiles) {
 		throwIfCancelled(signal);
+
+		// Skip files not in candidate set (when we have import data)
+		if (candidateFiles && !candidateFiles.has(relPath)) continue;
+
 		const fullPath = path.resolve(projectRoot, relPath);
 		try {
 			const content = fs.readFileSync(fullPath, "utf8");
 			if (!content.includes(name)) continue;
 			const lines = content.split("\n");
-			const isDefinitionFile = !!definitionFile && relPath === definitionFile;
+			const isDefinitionFile = !!resolvedDefFile && relPath === resolvedDefFile;
+			const isImportingFile = candidateFiles ? candidateFiles.has(relPath) && !isDefinitionFile : false;
 
 			for (let i = 0; i < lines.length; i++) {
 				if ((i & 255) === 0) throwIfCancelled(signal);
@@ -379,13 +402,23 @@ export function findReferences(
 				const lineNum = i + 1;
 				const isDef = isDefinitionFile && definitionLines.has(lineNum);
 
+				// Confidence: high for definition site and importing files, low for others
+				let confidence: "high" | "medium" | "low";
+				if (isDef || isDefinitionFile) {
+					confidence = "high";
+				} else if (isImportingFile) {
+					confidence = "high";
+				} else {
+					confidence = "medium";
+				}
+
 				results.push({
 					file: relPath,
 					line: lineNum,
 					column: col,
 					lineText: line.trim(),
 					isDefinition: isDef,
-					confidence: isDef ? "high" : relPath === definitionFile ? "high" : "medium",
+					confidence,
 				});
 			}
 		} catch {
@@ -393,9 +426,49 @@ export function findReferences(
 		}
 	}
 
-	// Sort: definitions first, then by file and line
+	// If import-filtered search returned very few results, expand to all files
+	if (candidateFiles && results.length < 5) {
+		for (const { path: relPath } of allIndexedFiles) {
+			throwIfCancelled(signal);
+			if (candidateFiles.has(relPath)) continue; // Already searched
+
+			const fullPath = path.resolve(projectRoot, relPath);
+			try {
+				const content = fs.readFileSync(fullPath, "utf8");
+				if (!content.includes(name)) continue;
+				const lines = content.split("\n");
+
+				for (let i = 0; i < lines.length; i++) {
+					if ((i & 255) === 0) throwIfCancelled(signal);
+					const line = lines[i];
+					if (!line.includes(name)) continue;
+					if (!symbolRegex.test(line)) continue;
+
+					const col = line.indexOf(name);
+					if (col === -1) continue;
+
+					results.push({
+						file: relPath,
+						line: i + 1,
+						column: col,
+						lineText: line.trim(),
+						isDefinition: false,
+						confidence: "low",
+					});
+				}
+			} catch {
+				// Skip unreadable files
+			}
+		}
+	}
+
+	// Sort: definitions first, then high confidence, then by file and line
 	results.sort((a, b) => {
 		if (a.isDefinition !== b.isDefinition) return a.isDefinition ? -1 : 1;
+		const confOrder = { high: 0, medium: 1, low: 2 };
+		const ca = confOrder[a.confidence];
+		const cb = confOrder[b.confidence];
+		if (ca !== cb) return ca - cb;
 		if (a.file !== b.file) return a.file.localeCompare(b.file);
 		return a.line - b.line;
 	});
@@ -633,6 +706,137 @@ function throwIfCancelled(signal?: { aborted?: boolean }) {
 	}
 }
 
+// ---- Dependency queries ----
+
+export interface DependencyResult {
+	/** The file that has the dependency. */
+	sourceFile: string;
+	/** The source symbol (e.g., class name for extends). Null for file-level imports. */
+	sourceSymbol: string | null;
+	/** The target file (resolved, or null if external/unresolved). */
+	targetFile: string | null;
+	/** The target symbol name. */
+	targetSymbol: string | null;
+	/** Relationship type: 'imports', 're_exports', 'extends', 'implements'. */
+	relationship: string;
+	/** Line number in the source file. */
+	line: number;
+	/** Original raw import path (e.g., "./utils", "lodash"). */
+	rawSource: string | null;
+}
+
+/**
+ * Find what a file depends on (outgoing edges: imports, extends, implements).
+ */
+export function findDependencies(
+	file: string,
+	store: Store,
+	relationship?: string,
+): DependencyResult[] {
+	const edges = store.findEdgesFromSource(file);
+	const filtered = relationship
+		? edges.filter((e) => e.relationship === relationship)
+		: edges;
+
+	return filtered.map((e) => ({
+		sourceFile: e.sourceFile,
+		sourceSymbol: e.sourceSymbol,
+		targetFile: e.targetFile,
+		targetSymbol: e.targetSymbol,
+		relationship: e.relationship,
+		line: e.line,
+		rawSource: e.rawSource,
+	}));
+}
+
+/**
+ * Find what depends on a file or symbol (incoming edges).
+ *
+ * When `file` is provided: finds files that import from that file.
+ * When `symbol` is provided: finds files/classes that extend/implement that symbol.
+ * Both can be combined.
+ */
+export function findDependents(
+	store: Store,
+	options: {
+		file?: string;
+		symbol?: string;
+		relationship?: string;
+	},
+): DependencyResult[] {
+	const results: DependencyResult[] = [];
+	const seen = new Set<number>();
+
+	// Find files that import from the target file
+	if (options.file) {
+		let edges = store.findEdgesToTarget(options.file);
+		if (options.relationship) {
+			edges = edges.filter((e) => e.relationship === options.relationship);
+		} else {
+			// Default to imports and re_exports when querying by file
+			edges = edges.filter((e) => e.relationship === "imports" || e.relationship === "re_exports");
+		}
+		for (const e of edges) {
+			if (!seen.has(e.id)) {
+				seen.add(e.id);
+				results.push(edgeToDepResult(e));
+			}
+		}
+	}
+
+	// Find classes that extend/implement the target symbol
+	if (options.symbol) {
+		for (const rel of ["extends", "implements"] as const) {
+			if (options.relationship && options.relationship !== rel) continue;
+			const edges = store.findEdgesToSymbol(options.symbol, rel);
+			for (const e of edges) {
+				if (!seen.has(e.id)) {
+					seen.add(e.id);
+					results.push(edgeToDepResult(e));
+				}
+			}
+		}
+	}
+
+	// Sort: imports first, then extends, then implements; within each by file
+	results.sort((a, b) => {
+		const relOrder: Record<string, number> = { imports: 0, re_exports: 1, extends: 2, implements: 3 };
+		const ra = relOrder[a.relationship] ?? 4;
+		const rb = relOrder[b.relationship] ?? 4;
+		if (ra !== rb) return ra - rb;
+		return a.sourceFile.localeCompare(b.sourceFile) || a.line - b.line;
+	});
+
+	return results;
+}
+
+function edgeToDepResult(e: import("./store.js").EdgeRecord): DependencyResult {
+	return {
+		sourceFile: e.sourceFile,
+		sourceSymbol: e.sourceSymbol,
+		targetFile: e.targetFile,
+		targetSymbol: e.targetSymbol,
+		relationship: e.relationship,
+		line: e.line,
+		rawSource: e.rawSource,
+	};
+}
+
+/**
+ * Get files that import from a given file. Used by findReferences for
+ * import-aware filtering.
+ */
+function getImportingFiles(targetFile: string, store: Store): Set<string> {
+	const edges = store.findEdgesToTarget(targetFile);
+	const files = new Set<string>();
+	for (const e of edges) {
+		if (e.relationship === "imports" || e.relationship === "re_exports") {
+			files.add(e.sourceFile);
+		}
+	}
+	return files;
+}
+
 /**
  * Index file content into FTS5. Called after symbol indexing.
  */
@@ -695,9 +899,9 @@ function refreshDirtySet(
 			continue;
 		}
 
-		const result = indexFile(fullPath, relPath);
+		const result = indexFile(fullPath, relPath, undefined, undefined, projectRoot);
 		if (result) {
-			store.indexFile(relPath, result.language, result.hash, result.symbols);
+			store.indexFile(relPath, result.language, result.hash, result.symbols, result.edges);
 			const processed = preprocessForFts(content);
 			store.indexFileContent(relPath, content, processed);
 			refreshed++;
@@ -747,10 +951,10 @@ function refreshByMtime(
 
 		const currentHash = hashContent(content);
 		if (currentHash !== hash) {
-			// File changed — re-index both symbols and content
-			const result = indexFile(fullPath, relPath);
+			// File changed — re-index both symbols, edges, and content
+			const result = indexFile(fullPath, relPath, undefined, undefined, projectRoot);
 			if (result) {
-				store.indexFile(relPath, result.language, result.hash, result.symbols);
+				store.indexFile(relPath, result.language, result.hash, result.symbols, result.edges);
 				const processed = preprocessForFts(content);
 				store.indexFileContent(relPath, content, processed);
 				refreshed++;

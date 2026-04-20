@@ -575,4 +575,162 @@ export function registerTools(
 			};
 		},
 	});
+
+	// Tool: Dependencies
+	pi.registerTool({
+		name: "code_nav_dependencies",
+		label: "Find Dependencies",
+		description:
+			"Find import relationships, class inheritance, and interface implementations. " +
+			"Use to understand the dependency graph: what does this file depend on, or who depends on it. " +
+			"Supports 'imports' (what a file imports), 'extends' (class hierarchy), and 'implements' (interface implementations). " +
+			"Critical for understanding change impact before refactoring.",
+		promptSnippet: "Find file dependencies and inheritance relationships",
+		promptGuidelines: [
+			"Use code_nav_dependencies before refactoring to understand the full dependency graph.",
+			"direction='dependents' shows WHO depends on a file/symbol (reverse dependency).",
+			"direction='dependencies' shows what a file depends on (forward dependency).",
+			"Use relationship filter to narrow to 'imports', 'extends', or 'implements'.",
+			"Combine with code_nav_references for comprehensive impact analysis.",
+		],
+		parameters: Type.Object({
+			file: Type.Optional(
+				Type.String({
+					description: "File path (relative to project root) to query dependencies for.",
+				}),
+			),
+			symbol: Type.Optional(
+				Type.String({
+					description: "Symbol name to query relationships for (e.g., class name for extends/implements lookups).",
+				}),
+			),
+			direction: Type.String({
+				description: "'dependents' = who depends on this file/symbol, 'dependencies' = what this file depends on.",
+				enum: ["dependents", "dependencies"],
+			}),
+			relationship: Type.Optional(
+				Type.String({
+					description: "Filter by relationship type: 'imports', 're_exports', 'extends', 'implements'.",
+					enum: ["imports", "re_exports", "extends", "implements"],
+				}),
+			),
+		}),
+		async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+			if (signal?.aborted) {
+				throw new Error("[code-nav] Operation cancelled.");
+			}
+			const store = getStore();
+			if (!store) {
+				throw new Error("[code-nav] Index not initialized. Try again in a moment.");
+			}
+
+			refreshDirty(store, getRoot());
+			const root = getRoot();
+			const engine = await import("./engine.js");
+
+			if (params.direction === "dependencies") {
+				if (!params.file) {
+					return {
+						content: [{ type: "text", text: "Provide 'file' parameter for direction='dependencies'." }],
+						details: withIndexingPolicy({}, store),
+					};
+				}
+
+				const results = engine.findDependencies(params.file, store, params.relationship);
+
+				if (results.length === 0) {
+					return {
+						content: [{ type: "text", text: `No dependencies found for "${params.file}"${params.relationship ? ` (relationship: ${params.relationship})` : ""}.` }],
+						details: withIndexingPolicy({}, store),
+					};
+				}
+
+				// Group by relationship type
+				const byRel = new Map<string, typeof results>();
+				for (const r of results) {
+					const arr = byRel.get(r.relationship) ?? [];
+					arr.push(r);
+					byRel.set(r.relationship, arr);
+				}
+
+				let text = `Dependencies of ${params.file} (${results.length}):\n\n`;
+				const relLabels: Record<string, string> = {
+					imports: "Imports",
+					re_exports: "Re-exports from",
+					extends: "Extends",
+					implements: "Implements",
+				};
+
+				for (const [rel, items] of byRel) {
+					text += `── ${relLabels[rel] ?? rel} ──\n`;
+					for (const item of items) {
+						const target = item.targetFile
+							? `${item.targetFile}${item.targetSymbol ? ` (${item.targetSymbol})` : ""}`
+							: item.targetSymbol ?? item.rawSource ?? "(unknown)";
+						const local = item.sourceSymbol ? ` as ${item.sourceSymbol}` : "";
+						text += `  ${item.line} | ${target}${local}\n`;
+					}
+					text += "\n";
+				}
+
+				return {
+					content: [{ type: "text", text }],
+					details: withIndexingPolicy({ dependencies: results }, store),
+				};
+			} else {
+				// direction === "dependents"
+				if (!params.file && !params.symbol) {
+					return {
+						content: [{ type: "text", text: "Provide 'file' and/or 'symbol' parameter for direction='dependents'." }],
+						details: withIndexingPolicy({}, store),
+					};
+				}
+
+				const results = engine.findDependents(store, {
+					file: params.file,
+					symbol: params.symbol,
+					relationship: params.relationship,
+				});
+
+				if (results.length === 0) {
+					const target = params.symbol ?? params.file;
+					return {
+						content: [{ type: "text", text: `No dependents found for "${target}"${params.relationship ? ` (relationship: ${params.relationship})` : ""}.` }],
+						details: withIndexingPolicy({}, store),
+					};
+				}
+
+				// Group by relationship type
+				const byRel = new Map<string, typeof results>();
+				for (const r of results) {
+					const arr = byRel.get(r.relationship) ?? [];
+					arr.push(r);
+					byRel.set(r.relationship, arr);
+				}
+
+				const target = params.symbol ? `symbol "${params.symbol}"` : `"${params.file}"`;
+				let text = `Dependents of ${target} (${results.length}):\n\n`;
+				const relLabels: Record<string, string> = {
+					imports: "Imported by",
+					re_exports: "Re-exported by",
+					extends: "Extended by",
+					implements: "Implemented by",
+				};
+
+				for (const [rel, items] of byRel) {
+					text += `── ${relLabels[rel] ?? rel} ──\n`;
+					for (const item of items) {
+						const symbols = item.sourceSymbol ? ` (${item.sourceSymbol})` : "";
+						text += `  ${item.sourceFile}:${item.line}${symbols}\n`;
+					}
+					text += "\n";
+				}
+
+				return {
+					content: [{ type: "text", text }],
+					details: withIndexingPolicy({ dependents: results }, store),
+				};
+			}
+		},
+	});
 }

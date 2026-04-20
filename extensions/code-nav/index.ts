@@ -24,6 +24,7 @@ const CODE_NAV_TOOLS = [
 	"code_nav_symbols",
 	"code_nav_fetch_context",
 	"code_nav_search",
+	"code_nav_dependencies",
 ];
 
 const DEFAULT_INDEX_OPTIONS: Required<FullIndexOptions> = {
