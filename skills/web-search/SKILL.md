@@ -11,19 +11,22 @@ Interactive web search using the web-browser skill. Searches DuckDuckGo by defau
 
 ## Prerequisites
 
-Requires the web-browser skill. Start Chrome first:
+Requires the web-browser skill. Chrome is **auto-started** if not already running — no manual step needed.
+
+If auto-start fails, you can start Chrome manually:
 
 ```bash
 {baseDir}/../web-browser/scripts/start.js              # Fresh profile
 {baseDir}/../web-browser/scripts/start.js --profile    # Copy your profile (cookies, logins)
+{baseDir}/../web-browser/scripts/start.js --headless   # No GUI needed
 ```
 
 ## Search
 
 ```bash
-{baseDir}/scripts/search.js "query"# Basic search (5 results)
-{baseDir}/scripts/search.js "query" -n 10   # More results
-{baseDir}/scripts/search.js "query" --brave # Use Brave Search directly
+{baseDir}/scripts/search.js "query"             # Basic search (5 results)
+{baseDir}/scripts/search.js "query" -n 10       # More results
+{baseDir}/scripts/search.js "query" --brave     # Use Brave Search directly
 ```
 
 ### Options
@@ -45,8 +48,8 @@ Snippet: Description from search results
 
 ## How It Works
 
-1. Navigates to DuckDuckGo (search.brave.com if `--brave` flag used)
-2. Enters search query in the search box
+1. Checks if Chrome is running; auto-starts it if not
+2. Navigates to DuckDuckGo (search.brave.com if `--brave` flag used)
 3. Extracts results from the page
 4. Falls back to Brave Search if DuckDuckGo fails
 

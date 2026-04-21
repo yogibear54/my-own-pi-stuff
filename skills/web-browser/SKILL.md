@@ -13,9 +13,12 @@ Minimal CDP tools for collaborative site exploration.
 ```bash
 ./scripts/start.js              # Fresh profile
 ./scripts/start.js --profile    # Copy your profile (cookies, logins)
+./scripts/start.js --headless   # No GUI needed (e.g. on headless servers)
 ```
 
 Start Chrome on `:9222` with remote debugging. Requires `google-chrome` installed on Linux.
+
+If Chrome was already started by a previous run but has become a zombie (port taken but not responding), `start.js` will automatically kill the stale process and restart. If it fails to start, it prints the Chrome stderr log and suggests fixes.
 
 ## Navigate
 

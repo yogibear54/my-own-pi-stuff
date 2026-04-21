@@ -6,11 +6,15 @@
  * Usage:
  *   search.js "query"           # Search DuckDuckGo
  *   search.js "query" -n 10     # More results
- *   search.js "query" --brave  # Use Brave Search directly
+ *   search.js "query" --brave   # Use Brave Search directly
  */
 
 import { connect } from "../../web-browser/scripts/cdp.js";
+import { execSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEBUG = process.env.DEBUG === "1";
 const log = DEBUG ? (...args) => console.error("[debug]", ...args) : () => {};
 
@@ -32,10 +36,10 @@ for (let i = 0; i < args.length; i++) {
 }
 
 if (!query) {
-  console.log("Usage: search.js \"query\" [-n <num>] [--brave]");
+  console.log('Usage: search.js "query" [-n <num>] [--brave]');
   console.log("\nOptions:");
-  console.log("  -n <num>Number of results (default: 5)");
-  console.log("  --brave Use Brave Search directly");
+  console.log("  -n <num>   Number of results (default: 5)");
+  console.log("  --brave    Use Brave Search directly");
   console.log("\nExamples:");
   console.log('  search.js "node.js tutorials"');
   console.log('  search.js "rust documentation" -n 10');
@@ -55,7 +59,6 @@ const SEARCH_ENGINES = {
     resultExtract: `
       () => {
         const results = [];
-        // DuckDuckGo uses h2 > a[href] for titles in current UI
         const titleLinks = document.querySelectorAll('h2 a[href^="http"]');
         
         for (const link of titleLinks) {
@@ -75,7 +78,6 @@ const SEARCH_ENGINES = {
           if (results.length >= ${numResults}) break;
         }
         
-        // Fallback: find all external links
         if (results.length < ${numResults}) {
           const allLinks = document.querySelectorAll('a[href^="http"]');
           for (const link of allLinks) {
@@ -97,24 +99,19 @@ const SEARCH_ENGINES = {
   },
   brave: {
     url: BRAVE_URL,
-    // Brave Search works best with direct URL navigation (like DuckDuckGo)
     resultExtract: `
       () => {
         const results = [];
         const seen = new Set();
         
-        // Try multiple selectors for Brave Search results
-        // Method 1: snippet divs containing links
         const snippets = document.querySelectorAll('div[class*="snippet"]');
         for (const snippet of snippets) {
           const link = snippet.querySelector('a[href^="http"]');
           if (link && !seen.has(link.href)) {
             seen.add(link.href);
             const title = link.textContent.trim();
-            // Get domain/source
             const domainEl = snippet.querySelector('[class*="atribution"], [class*="domain"]');
             const domain = domainEl ? domainEl.textContent.trim() : '';
-            // Try to get description
             const descEl = snippet.querySelector('div[class*="description"], p, span');
             const snippet2 = descEl ? descEl.textContent.trim() : domain;
             
@@ -125,7 +122,6 @@ const SEARCH_ENGINES = {
           }
         }
         
-        // Method 2: fallback - any external links with meaningful text
         if (results.length < ${numResults}) {
           const links = document.querySelectorAll('a[href^="http"]');
           for (const link of links) {
@@ -157,6 +153,32 @@ async function waitFor(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Try to auto-start Chrome via start.js if the debug port isn't responding.
+ */
+async function ensureChromeRunning() {
+  try {
+    const resp = await fetch("http://localhost:9222/json/version", { signal: AbortSignal.timeout(2000) });
+    if (resp.ok) return; // already running
+  } catch {}
+
+  log("Chrome not running, auto-starting...");
+  // __dirname = ~/.pi/agent/skills/web-search/scripts/
+  // need     = ~/.pi/agent/skills/web-browser/scripts/start.js
+  const startScript = join(__dirname, "..", "..", "web-browser", "scripts", "start.js");
+
+  try {
+    execSync(`node "${startScript}"`, {
+      timeout: 30000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e) {
+    // start.js may have printed its own error. Fall through — we'll try to connect
+    // and if that fails too, we'll give a combined error below.
+    log("Auto-start output:", e.stdout?.toString(), e.stderr?.toString());
+  }
+}
+
 // Ensure a tab exists, creating one if needed
 async function ensureTab(cdp, initialUrl = null) {
   const pages = await cdp.getPages();
@@ -179,7 +201,6 @@ async function search(engine, cdp, sessionId, query) {
   const config = SEARCH_ENGINES[engine];
   log(`Using ${engine} search...`);
   
-  // Direct URL search for each engine (more reliable than form submission)
   const searchUrls = {
     duckduckgo: `https://duckduckgo.com/?q=${encodeURIComponent(query)}`,
     brave: `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`
@@ -192,7 +213,7 @@ async function search(engine, cdp, sessionId, query) {
   
   log(`Navigating to ${searchUrl}...`);
   await cdp.navigate(sessionId, searchUrl);
-  await waitFor(4000); // Wait for page load
+  await waitFor(4000);
   
   // Dismiss cookie dialogs
   log("Dismissing cookie dialogs...");
@@ -221,17 +242,19 @@ async function search(engine, cdp, sessionId, query) {
 }
 
 async function main() {
+  // Auto-start Chrome if needed
+  await ensureChromeRunning();
+
   log("connecting...");
   let cdp;
   try {
-    cdp = await connect(5000);
+    cdp = await connect(8000);
   } catch (e) {
     console.error("✗ Failed to connect to Chrome:", e.message);
     console.error("");
-    console.error("  Chrome must be running with remote debugging enabled.");
-    console.error("  Start Chrome first:");
-    console.error("    ./scripts/start.js              # Fresh profile");
-    console.error("    ./scripts/start.js --profile    # Copy your profile");
+    console.error("  Auto-start failed. Try manually:");
+    console.error("    cd ~/.pi/agent/skills/web-browser && ./scripts/start.js");
+    console.error("    cd ~/.pi/agent/skills/web-browser && ./scripts/start.js --headless  # no GUI");
     process.exit(1);
   }
 
@@ -240,7 +263,6 @@ async function main() {
   
   if (!page) {
     console.error("✗ Could not create or find a tab");
-    console.error("  Tip: Run './scripts/nav.js https://example.com --new' first to create a tab");
     process.exit(1);
   }
 
@@ -262,9 +284,8 @@ async function main() {
       log(`${engine} search failed:`, e.message);
       lastError = e;
       
-      // Navigate to fallback search engine
       if (!useBrave && engine === "duckduckgo" && engines.indexOf(engine) < engines.length - 1) {
-        console.error(`✗ DuckDuckGo failed, falling back to Brave Search...`);
+        console.error(`⚠ DuckDuckGo failed, falling back to Brave Search...`);
       }
     }
   }
