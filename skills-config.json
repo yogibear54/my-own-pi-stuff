@@ -1,9 +1,8 @@
 {
 	"enabled": [
-		"brave-search",
 		"web-browser",
 		"web-search",
-		"pdf-extractor",
-		"frontend-design"
+		"brave-search",
+		"pdf-extractor"
 	]
 }
