@@ -28,10 +28,13 @@ import {
 	symlinkSync,
 	unlinkSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const HOME = process.env.HOME || "/root";
-const AGENT_GIT = join(HOME, ".pi", "agent-git");
+const AGENT_GIT_DEFAULT = join(HOME, ".pi", "agent-git");
+const AGENT_GIT = process.env.PI_AGENT_GIT_DIR
+	? resolve(process.env.PI_AGENT_GIT_DIR)
+	: AGENT_GIT_DEFAULT;
 const AGENT = join(HOME, ".pi", "agent");
 
 // Root files that should NOT be linkable
@@ -49,32 +52,36 @@ interface Category {
 	type: "file" | "dir" | "mixed";
 }
 
-const CATEGORIES: Category[] = [
-	{
-		name: "Root Config Files",
-		sourceDir: AGENT_GIT,
-		targetDir: AGENT,
-		type: "file",
-	},
-	{
-		name: "Extensions",
-		sourceDir: join(AGENT_GIT, "extensions"),
-		targetDir: join(AGENT, "extensions"),
-		type: "mixed", // both .ts files and directories
-	},
-	{
-		name: "Skills",
-		sourceDir: join(AGENT_GIT, "skills"),
-		targetDir: join(AGENT, "skills"),
-		type: "dir",
-	},
-	{
-		name: "Utils",
-		sourceDir: join(AGENT_GIT, "utils"),
-		targetDir: join(AGENT, "utils"),
-		type: "file",
-	},
-];
+function buildCategories(sourceDir: string): Category[] {
+	return [
+		{
+			name: "Root Config Files",
+			sourceDir,
+			targetDir: AGENT,
+			type: "file",
+		},
+		{
+			name: "Extensions",
+			sourceDir: join(sourceDir, "extensions"),
+			targetDir: join(AGENT, "extensions"),
+			type: "mixed", // both .ts files and directories
+		},
+		{
+			name: "Skills",
+			sourceDir: join(sourceDir, "skills"),
+			targetDir: join(AGENT, "skills"),
+			type: "dir",
+		},
+		{
+			name: "Utils",
+			sourceDir: join(sourceDir, "utils"),
+			targetDir: join(AGENT, "utils"),
+			type: "file",
+		},
+	];
+}
+
+let CATEGORIES: Category[] = buildCategories(AGENT_GIT);
 
 function getItems(category: Category): string[] {
 	if (!existsSync(category.sourceDir)) return [];
@@ -165,9 +172,10 @@ export default function systemManager(pi: ExtensionAPI) {
 				active: boolean;
 			}
 
+			let categories = CATEGORIES;
 			const allItems: ItemInfo[] = [];
 
-			for (const cat of CATEGORIES) {
+			for (const cat of categories) {
 				const items = getItems(cat);
 				for (const item of items) {
 					allItems.push({
@@ -179,7 +187,31 @@ export default function systemManager(pi: ExtensionAPI) {
 			}
 
 			if (allItems.length === 0) {
-				ctx.ui.notify("No items found in agent-git/", "warning");
+				const userPath = await ctx.ui.input(
+					"Source directory not found. Enter path to source directory:",
+					AGENT_GIT_DEFAULT,
+				);
+
+				if (userPath && userPath.trim()) {
+					const newSource = resolve(userPath.trim());
+					categories = buildCategories(newSource);
+					CATEGORIES = categories;
+
+					for (const cat of categories) {
+						const items = getItems(cat);
+						for (const item of items) {
+							allItems.push({
+								category: cat,
+								name: item,
+								active: isActive(cat, item),
+							});
+						}
+					}
+				}
+			}
+
+			if (allItems.length === 0) {
+				ctx.ui.notify("No items found in source directory.", "warning");
 				return;
 			}
 
@@ -195,7 +227,7 @@ export default function systemManager(pi: ExtensionAPI) {
 						values: [],
 					});
 
-					for (const cat of CATEGORIES) {
+					for (const cat of categories) {
 						const enabled = allItems.filter(
 							(i) => i.category.name === cat.name && i.active,
 						);
@@ -234,7 +266,7 @@ export default function systemManager(pi: ExtensionAPI) {
 						values: [],
 					});
 
-					for (const cat of CATEGORIES) {
+					for (const cat of categories) {
 						const disabled = allItems.filter(
 							(i) => i.category.name === cat.name && !i.active,
 						);
@@ -300,7 +332,7 @@ export default function systemManager(pi: ExtensionAPI) {
 						if (sepIdx === -1) return;
 						const catName = id.substring(0, sepIdx);
 						const itemName = id.substring(sepIdx + 2);
-						const category = CATEGORIES.find(
+						const category = categories.find(
 							(c) => c.name === catName,
 						);
 						if (!category) return;
