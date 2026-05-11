@@ -11,15 +11,15 @@
  * Selecting an item toggles its symlink state.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { getSettingsListTheme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
 	type SettingItem,
 	SettingsList,
 	Spacer,
 	Text,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import {
 	existsSync,
 	lstatSync,

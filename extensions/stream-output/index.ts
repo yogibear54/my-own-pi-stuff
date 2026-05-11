@@ -24,7 +24,7 @@
  *   pi -p --stream=all "write me a poem" 1>/dev/null             # text only (from stderr)
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ANSI color codes
 const colors = {

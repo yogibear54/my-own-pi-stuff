@@ -10,8 +10,8 @@
  *   /quick-review --provider anthropic file      # Use specific provider (skips prompt)
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Model } from "@mariozechner/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Model } from "@earendil-works/pi-ai";
 import {
 	Container,
 	Input,
@@ -20,7 +20,7 @@ import {
 	SelectList,
 	Spacer,
 	Text,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 const REVIEW_PROMPT = `You are a code reviewer. Your task is to analyze the provided code for:
 

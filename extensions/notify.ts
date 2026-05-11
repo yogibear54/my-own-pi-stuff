@@ -9,8 +9,8 @@
  */
 
 import { execFileSync } from "child_process";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Markdown, type MarkdownTheme } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 
 /**
  * Send a desktop notification via `notify-send`.
