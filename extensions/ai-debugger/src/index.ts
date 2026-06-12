@@ -1,0 +1,240 @@
+/**
+ * AI Debugger Extension for pi
+ *
+ * Hypothesis-driven debugging: hypothesize → instrument → observe → fix → verify → cleanup.
+ *
+ * Phase A (MVP): JS/TS only, core loop.
+ * See REQUIREMENTS.md in the project root for full specification.
+ */
+
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { SessionStore } from "./session-store.js";
+
+export default function (pi: ExtensionAPI) {
+	// ── State ───────────────────────────────────────────────────────────────
+
+	const store = new SessionStore(process.cwd());
+
+	// ── Custom Tools (LLM-callable) ──────────────────────────────────────────
+
+	pi.registerTool({
+		name: "debug_hypothesize",
+		label: "Debug: Hypothesize",
+		description:
+			"Generate ranked hypotheses about a bug's root cause. " +
+			"Each hypothesis includes suspected files, confidence level, and what runtime data would confirm it.",
+		parameters: Type.Object({
+			bugDescription: Type.String({ description: "Description of the bug being investigated" }),
+			context: Type.Optional(
+				Type.String({ description: "Additional context: error messages, stack traces, relevant code snippets" }),
+			),
+		}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+			// TODO: implement (TODO-ab21793b)
+			return {
+				content: [{ type: "text", text: "debug_hypothesize not yet implemented" }],
+				details: {},
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "debug_instrument",
+		label: "Debug: Instrument",
+		description:
+			"Inject logging statements into files to capture runtime data for a hypothesis. " +
+			"Instrumentation is wrapped in __AI_DEBUG_START__ / __AI_DEBUG_END__ markers for later cleanup.",
+		parameters: Type.Object({
+			hypothesisId: Type.Number({ description: "The hypothesis ID to instrument for" }),
+			instrumentationPlan: Type.Array(
+				Type.Object({
+					file: Type.String({ description: "File path to instrument" }),
+					location: Type.Optional(
+						Type.Object({
+							line: Type.Optional(Type.Number({ description: "Approximate line number" })),
+							function: Type.Optional(Type.String({ description: "Function name" })),
+						}),
+					),
+					whatToLog: Type.String({ description: "Description of what to capture at this point" }),
+				}),
+			),
+		}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+			// TODO: implement (TODO-37f14634)
+			return {
+				content: [{ type: "text", text: "debug_instrument not yet implemented" }],
+				details: {},
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "debug_logs",
+		label: "Debug: Logs",
+		description: "Query collected runtime logs with filters. Use after the user reproduces the bug.",
+		parameters: Type.Object({
+			hypothesisId: Type.Optional(Type.Number({ description: "Filter by hypothesis ID" })),
+			tag: Type.Optional(Type.String({ description: "Filter by log tag" })),
+			level: Type.Optional(
+				Type.Union([Type.Literal("debug"), Type.Literal("info"), Type.Literal("warn"), Type.Literal("error")]),
+			),
+			since: Type.Optional(Type.String({ description: "ISO 8601 timestamp — only logs after this time" })),
+			search: Type.Optional(Type.String({ description: "Free-text search across log data" })),
+			limit: Type.Optional(Type.Number({ description: "Max entries to return (default 50)" })),
+		}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+			// TODO: implement (TODO-9d55b9bb)
+			return {
+				content: [{ type: "text", text: "debug_logs not yet implemented" }],
+				details: {},
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "debug_fix",
+		label: "Debug: Fix",
+		description:
+			"Record a fix applied for a confirmed hypothesis. " +
+			"The actual code edit is done via the edit tool — this tracks the fix separately from instrumentation.",
+		parameters: Type.Object({
+			hypothesisId: Type.Number({ description: "The hypothesis ID this fix addresses" }),
+			description: Type.String({ description: "What the fix does and why" }),
+			files: Type.Array(
+				Type.Object({
+					path: Type.String({ description: "File that was modified" }),
+					changes: Type.String({ description: "Description of the changes made" }),
+				}),
+			),
+		}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+			// TODO: implement (TODO-8f058f8a)
+			return {
+				content: [{ type: "text", text: "debug_fix not yet implemented" }],
+				details: {},
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "debug_cleanup",
+		label: "Debug: Cleanup",
+		description:
+			"Remove all injected instrumentation from the codebase, keeping only verified fixes. " +
+			"Call when the bug is confirmed fixed. Shuts down the log collector.",
+		parameters: Type.Object({
+			sessionId: Type.Optional(Type.String({ description: "Session to clean up (defaults to active)" })),
+		}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+			// TODO: implement (TODO-7953f604)
+			return {
+				content: [{ type: "text", text: "debug_cleanup not yet implemented" }],
+				details: {},
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "debug_status",
+		label: "Debug: Status",
+		description: "Return the current debug session state: phase, iteration, hypotheses, files modified, log count.",
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+			const session = store.getActive();
+			if (!session) {
+				return {
+					content: [{ type: "text", text: "No active debug session." }],
+					details: {},
+				};
+			}
+			return {
+				content: [{ type: "text", text: `Active session: ${session.id} (status tool not yet fully implemented)` }],
+				details: {},
+			};
+		},
+	});
+
+	// ── Commands (User-facing) ───────────────────────────────────────────────
+
+	pi.registerCommand("debug start", {
+		description: "Start a debug session. Sets up log collector and session state.",
+		handler: async (_args, ctx) => {
+			// TODO: implement fully (TODO-415787ba)
+			if (store.getActive()) {
+				const active = store.getActive()!;
+				ctx.ui.notify(
+					`A debug session is already active (${active.id}). Run /debug cleanup or /debug abort first.`,
+					"warning",
+				);
+				return;
+			}
+			ctx.ui.notify("🐛 Debug session start not yet implemented", "info");
+		},
+	});
+
+	pi.registerCommand("debug status", {
+		description: "Display current debug session state.",
+		handler: async (_args, ctx) => {
+			// TODO: implement (TODO-b0b2561d)
+			ctx.ui.notify("No active debug session.", "info");
+		},
+	});
+
+	pi.registerCommand("debug logs", {
+		description: "View collected debug logs.",
+		handler: async (_args, ctx) => {
+			// TODO: implement (TODO-e2a2d95d)
+			ctx.ui.notify("No active debug session.", "info");
+		},
+	});
+
+	pi.registerCommand("debug cleanup", {
+		description: "Remove all instrumentation from the codebase, keeping fixes.",
+		handler: async (_args, ctx) => {
+			// TODO: implement (TODO-5a3274e7)
+			ctx.ui.notify("No active debug session.", "info");
+		},
+	});
+
+	pi.registerCommand("debug abort", {
+		description: "Abort debug session and revert all changes (instrumentation + fixes).",
+		handler: async (_args, ctx) => {
+			// TODO: implement (TODO-7767f846)
+			ctx.ui.notify("No active debug session.", "info");
+		},
+	});
+
+	pi.registerCommand("debug history", {
+		description: "List past debug sessions and their outcomes.",
+		handler: async (_args, ctx) => {
+			// TODO: implement (TODO-3a231913)
+			ctx.ui.notify("No debug sessions found.", "info");
+		},
+	});
+
+	// ── Lifecycle ────────────────────────────────────────────────────────────
+
+	pi.on("session_start", async (_event, ctx) => {
+		// Restore active session from disk if present
+		const existing = store.findActiveOnDisk();
+		if (existing) {
+			store.restore(existing);
+			ctx.ui.notify(`🐛 Restored debug session: ${existing.id} (${existing.phase})`, "info");
+		}
+	});
+
+	pi.on("session_shutdown", async (_event, ctx) => {
+		const session = store.getActive();
+		if (session && session.status === "active") {
+			store.persist(session);
+			const fileCount = session.instrumentedFiles.length;
+			if (fileCount > 0) {
+				ctx.ui.notify(
+					`⚠️ Debug session ${session.id} is still active with instrumentation in ${fileCount} file(s). Run /debug cleanup before exiting.`,
+					"warning",
+				);
+			}
+		}
+	});
+}
