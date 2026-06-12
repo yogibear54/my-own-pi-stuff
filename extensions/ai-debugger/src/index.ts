@@ -10,11 +10,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { SessionStore } from "./session-store.js";
+import { loadConfig } from "./config.js";
+import type { DebugConfig } from "./config.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
 
 	const store = new SessionStore(process.cwd());
+	const config: DebugConfig = loadConfig(process.cwd());
 
 	// ── Custom Tools (LLM-callable) ──────────────────────────────────────────
 
