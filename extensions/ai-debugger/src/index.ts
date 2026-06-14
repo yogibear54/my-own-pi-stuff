@@ -22,6 +22,7 @@ import {
 } from "./lifecycle.js";
 import { createHypothesizeTool } from "./tools/hypothesize.js";
 import { createInstrumentTool } from "./tools/instrument.js";
+import { createLogsTool } from "./tools/logs.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -55,28 +56,12 @@ export default function (pi: ExtensionAPI) {
 		}),
 	);
 
-	pi.registerTool({
-		name: "debug_logs",
-		label: "Debug: Logs",
-		description: "Query collected runtime logs with filters. Use after the user reproduces the bug.",
-		parameters: Type.Object({
-			hypothesisId: Type.Optional(Type.Number({ description: "Filter by hypothesis ID" })),
-			tag: Type.Optional(Type.String({ description: "Filter by log tag" })),
-			level: Type.Optional(
-				Type.Union([Type.Literal("debug"), Type.Literal("info"), Type.Literal("warn"), Type.Literal("error")]),
-			),
-			since: Type.Optional(Type.String({ description: "ISO 8601 timestamp — only logs after this time" })),
-			search: Type.Optional(Type.String({ description: "Free-text search across log data" })),
-			limit: Type.Optional(Type.Number({ description: "Max entries to return (default 50)" })),
+	pi.registerTool(
+		createLogsTool({
+			store,
+			collector,
 		}),
-		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
-			// TODO: implement (TODO-9d55b9bb)
-			return {
-				content: [{ type: "text", text: "debug_logs not yet implemented" }],
-				details: {},
-			};
-		},
-	});
+	);
 
 	pi.registerTool({
 		name: "debug_fix",
