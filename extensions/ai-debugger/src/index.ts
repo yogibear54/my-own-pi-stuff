@@ -28,6 +28,7 @@ import { createCleanupTool, performCleanup } from "./tools/cleanup.js";
 import { createStatusTool } from "./tools/status.js";
 import { performStart, buildStartMessage, buildStartWidget } from "./commands/start.js";
 import { buildStatusNotification } from "./commands/status.js";
+import { buildLogsNotification, RECENT_LOG_COUNT } from "./commands/logs.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -125,8 +126,14 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("debug logs", {
 		description: "View collected debug logs.",
 		handler: async (_args, ctx) => {
-			// TODO: implement (TODO-e2a2d95d)
-			ctx.ui.notify("No active debug session.", "info");
+			const session = store.getActive();
+			if (!session) {
+				ctx.ui.notify("No active debug session.", "info");
+				return;
+			}
+			const recent = collector.getRecent(session.id, RECENT_LOG_COUNT);
+			const total = collector.getRecent(session.id, Infinity).length;
+			ctx.ui.notify(buildLogsNotification(session.id, recent, total), "info");
 		},
 	});
 
