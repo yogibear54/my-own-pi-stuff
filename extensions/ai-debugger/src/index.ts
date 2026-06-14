@@ -40,6 +40,7 @@ import {
 	buildAbortNotification,
 	performAbort,
 } from "./commands/abort.js";
+import { buildHistoryNotification } from "./commands/history.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -201,8 +202,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("debug history", {
 		description: "List past debug sessions and their outcomes.",
 		handler: async (_args, ctx) => {
-			// TODO: implement (TODO-3a231913)
-			ctx.ui.notify("No debug sessions found.", "info");
+			ctx.ui.notify(buildHistoryNotification(store.list()), "info");
 		},
 	});
 
