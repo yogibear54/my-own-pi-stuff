@@ -27,6 +27,7 @@ import { createFixTool } from "./tools/fix.js";
 import { createCleanupTool, performCleanup } from "./tools/cleanup.js";
 import { createStatusTool } from "./tools/status.js";
 import { performStart, buildStartMessage, buildStartWidget } from "./commands/start.js";
+import { buildStatusNotification } from "./commands/status.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -112,8 +113,12 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("debug status", {
 		description: "Display current debug session state.",
 		handler: async (_args, ctx) => {
-			// TODO: implement (TODO-b0b2561d)
-			ctx.ui.notify("No active debug session.", "info");
+			const session = store.getActive();
+			if (!session) {
+				ctx.ui.notify("No active debug session.", "info");
+				return;
+			}
+			ctx.ui.notify(buildStatusNotification(session), "info");
 		},
 	});
 
