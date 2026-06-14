@@ -23,6 +23,7 @@ import {
 import { createHypothesizeTool } from "./tools/hypothesize.js";
 import { createInstrumentTool } from "./tools/instrument.js";
 import { createLogsTool } from "./tools/logs.js";
+import { createFixTool } from "./tools/fix.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -63,30 +64,11 @@ export default function (pi: ExtensionAPI) {
 		}),
 	);
 
-	pi.registerTool({
-		name: "debug_fix",
-		label: "Debug: Fix",
-		description:
-			"Record a fix applied for a confirmed hypothesis. " +
-			"The actual code edit is done via the edit tool — this tracks the fix separately from instrumentation.",
-		parameters: Type.Object({
-			hypothesisId: Type.Number({ description: "The hypothesis ID this fix addresses" }),
-			description: Type.String({ description: "What the fix does and why" }),
-			files: Type.Array(
-				Type.Object({
-					path: Type.String({ description: "File that was modified" }),
-					changes: Type.String({ description: "Description of the changes made" }),
-				}),
-			),
+	pi.registerTool(
+		createFixTool({
+			store,
 		}),
-		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
-			// TODO: implement (TODO-8f058f8a)
-			return {
-				content: [{ type: "text", text: "debug_fix not yet implemented" }],
-				details: {},
-			};
-		},
-	});
+	);
 
 	pi.registerTool({
 		name: "debug_cleanup",
