@@ -24,6 +24,7 @@ import { createHypothesizeTool } from "./tools/hypothesize.js";
 import { createInstrumentTool } from "./tools/instrument.js";
 import { createLogsTool } from "./tools/logs.js";
 import { createFixTool } from "./tools/fix.js";
+import { createCleanupTool, performCleanup } from "./tools/cleanup.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -70,23 +71,13 @@ export default function (pi: ExtensionAPI) {
 		}),
 	);
 
-	pi.registerTool({
-		name: "debug_cleanup",
-		label: "Debug: Cleanup",
-		description:
-			"Remove all injected instrumentation from the codebase, keeping only verified fixes. " +
-			"Call when the bug is confirmed fixed. Shuts down the log collector.",
-		parameters: Type.Object({
-			sessionId: Type.Optional(Type.String({ description: "Session to clean up (defaults to active)" })),
+	pi.registerTool(
+		createCleanupTool({
+			store,
+			collector,
+			cwd: process.cwd(),
 		}),
-		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
-			// TODO: implement (TODO-7953f604)
-			return {
-				content: [{ type: "text", text: "debug_cleanup not yet implemented" }],
-				details: {},
-			};
-		},
-	});
+	);
 
 	pi.registerTool({
 		name: "debug_status",
@@ -145,8 +136,22 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("debug cleanup", {
 		description: "Remove all instrumentation from the codebase, keeping fixes.",
 		handler: async (_args, ctx) => {
-			// TODO: implement (TODO-5a3274e7)
-			ctx.ui.notify("No active debug session.", "info");
+			const session = store.getActive();
+			if (!session) {
+				ctx.ui.notify("No active debug session to clean up.", "info");
+				return;
+			}
+			try {
+				const summary = await performCleanup(
+					{ store, collector, cwd: process.cwd() },
+				);
+				ctx.ui.notify(
+					`🐛 Cleanup complete: ${summary.files.filter((f) => f.cleaned).length} file(s) cleaned, ${summary.totalBlocksRemoved} block(s) removed.`,
+					"info",
+				);
+			} catch (err) {
+				ctx.ui.notify(`Cleanup failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+			}
 		},
 	});
 
