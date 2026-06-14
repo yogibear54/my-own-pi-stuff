@@ -20,6 +20,7 @@ import {
 	onSessionShutdown,
 	onBeforeAgentStart,
 } from "./lifecycle.js";
+import { createHypothesizeTool } from "./tools/hypothesize.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -36,26 +37,13 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Custom Tools (LLM-callable) ──────────────────────────────────────────
 
-	pi.registerTool({
-		name: "debug_hypothesize",
-		label: "Debug: Hypothesize",
-		description:
-			"Generate ranked hypotheses about a bug's root cause. " +
-			"Each hypothesis includes suspected files, confidence level, and what runtime data would confirm it.",
-		parameters: Type.Object({
-			bugDescription: Type.String({ description: "Description of the bug being investigated" }),
-			context: Type.Optional(
-				Type.String({ description: "Additional context: error messages, stack traces, relevant code snippets" }),
-			),
+	pi.registerTool(
+		createHypothesizeTool({
+			store,
+			collector,
+			config,
 		}),
-		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
-			// TODO: implement (TODO-ab21793b)
-			return {
-				content: [{ type: "text", text: "debug_hypothesize not yet implemented" }],
-				details: {},
-			};
-		},
-	});
+	);
 
 	pi.registerTool({
 		name: "debug_instrument",
