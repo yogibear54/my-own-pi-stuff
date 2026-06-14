@@ -21,6 +21,7 @@ import {
 	onBeforeAgentStart,
 } from "./lifecycle.js";
 import { createHypothesizeTool } from "./tools/hypothesize.js";
+import { createInstrumentTool } from "./tools/instrument.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -45,35 +46,14 @@ export default function (pi: ExtensionAPI) {
 		}),
 	);
 
-	pi.registerTool({
-		name: "debug_instrument",
-		label: "Debug: Instrument",
-		description:
-			"Inject logging statements into files to capture runtime data for a hypothesis. " +
-			"Instrumentation is wrapped in __AI_DEBUG_START__ / __AI_DEBUG_END__ markers for later cleanup.",
-		parameters: Type.Object({
-			hypothesisId: Type.Number({ description: "The hypothesis ID to instrument for" }),
-			instrumentationPlan: Type.Array(
-				Type.Object({
-					file: Type.String({ description: "File path to instrument" }),
-					location: Type.Optional(
-						Type.Object({
-							line: Type.Optional(Type.Number({ description: "Approximate line number" })),
-							function: Type.Optional(Type.String({ description: "Function name" })),
-						}),
-					),
-					whatToLog: Type.String({ description: "Description of what to capture at this point" }),
-				}),
-			),
+	pi.registerTool(
+		createInstrumentTool({
+			store,
+			collector,
+			config,
+			cwd: process.cwd(),
 		}),
-		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
-			// TODO: implement (TODO-37f14634)
-			return {
-				content: [{ type: "text", text: "debug_instrument not yet implemented" }],
-				details: {},
-			};
-		},
-	});
+	);
 
 	pi.registerTool({
 		name: "debug_logs",
