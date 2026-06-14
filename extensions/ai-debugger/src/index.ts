@@ -7,7 +7,7 @@
  * See REQUIREMENTS.md in the project root for full specification.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { SessionStore } from "./session-store.js";
 import { loadConfig } from "./config.js";
@@ -26,7 +26,7 @@ import { createLogsTool } from "./tools/logs.js";
 import { createFixTool } from "./tools/fix.js";
 import { createCleanupTool, performCleanup } from "./tools/cleanup.js";
 import { createStatusTool } from "./tools/status.js";
-import { performStart, buildStartMessage, buildStartWidget } from "./commands/start.js";
+import { performStart, buildStartMessage } from "./commands/start.js";
 import { buildStatusNotification } from "./commands/status.js";
 import { buildLogsNotification, RECENT_LOG_COUNT } from "./commands/logs.js";
 import {
@@ -41,6 +41,8 @@ import {
 	performAbort,
 } from "./commands/abort.js";
 import { buildHistoryNotification } from "./commands/history.js";
+import { DebugWidgetManager } from "./widget.js";
+import type { CompletionSummary } from "./widget.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -54,6 +56,48 @@ export default function (pi: ExtensionAPI) {
 		collector,
 		showDebugContextMessage: config.showDebugContextMessage,
 	};
+
+	// ── Widget ─────────────────────────────────────────────────────────────
+
+	const widgetManager = new DebugWidgetManager();
+	let widgetUI: ExtensionContext["ui"] | null = null;
+	const SUMMARY_DISPLAY_MS = 5000;
+
+	/** Render the widget from the manager's current state, applying theme colors. */
+	function renderWidget(): void {
+		if (!widgetUI) return;
+		const lines = widgetManager.getLines();
+		if (lines.length === 0) {
+			widgetUI.setWidget("ai-debugger", undefined);
+			return;
+		}
+		const colored = lines.map((line) =>
+			line.color ? widgetUI!.theme.fg(line.color, line.text) : line.text,
+		);
+		widgetUI.setWidget("ai-debugger", colored);
+	}
+
+	/** Show a completion summary, then clear the widget after 5 seconds. */
+	function showCompletionSummary(summary: CompletionSummary, ctx: ExtensionContext): void {
+		widgetUI = ctx.ui;
+		widgetManager.showSummary(summary);
+		renderWidget();
+		setTimeout(() => {
+			widgetManager.clear();
+			renderWidget();
+		}, SUMMARY_DISPLAY_MS);
+	}
+
+	/** Live-update the widget when logs arrive at the collector. */
+	collector.on("log", (entry) => {
+		const session = store.getActive();
+		if (session && entry.session === session.id) {
+			store.incrementLogCount(session.id);
+			widgetManager.updateSession(store.getActive()!);
+			widgetManager.onLog(entry);
+			renderWidget();
+		}
+	});
 
 	// ── Custom Tools (LLM-callable) ──────────────────────────────────────────
 
@@ -112,8 +156,9 @@ export default function (pi: ExtensionAPI) {
 					(args ?? "").trim(),
 				);
 				ctx.ui.notify(buildStartMessage(summary), "info");
-				const session = store.getActive()!;
-				ctx.ui.setWidget("ai-debugger", buildStartWidget(session));
+				widgetUI = ctx.ui;
+				widgetManager.attach(store.getActive()!);
+				renderWidget();
 			} catch (err) {
 				ctx.ui.notify(
 					`${err instanceof Error ? err.message : String(err)}`,
@@ -167,7 +212,13 @@ export default function (pi: ExtensionAPI) {
 					{ store, collector, cwd: process.cwd() },
 				);
 				ctx.ui.notify(buildCleanupNotification(summary), "info");
-				ctx.ui.setWidget("ai-debugger", undefined);
+				showCompletionSummary({
+					sessionId: summary.sessionId,
+					status: "completed",
+					filesCleaned: summary.files.filter((f) => f.cleaned).length,
+					logsCollected: summary.logsCollected,
+					fixCount: summary.fixCount,
+				}, ctx);
 			} catch (err) {
 				ctx.ui.notify(`Cleanup failed: ${err instanceof Error ? err.message : String(err)}`, "error");
 			}
@@ -188,11 +239,19 @@ export default function (pi: ExtensionAPI) {
 			);
 			if (!confirmed) return;
 			try {
+				const abortLogCount = session.logCount;
+				const abortFixCount = session.fixes.length;
 				const summary = await performAbort(
 					{ store, collector, cwd: process.cwd() },
 				);
 				ctx.ui.notify(buildAbortNotification(summary), "info");
-				ctx.ui.setWidget("ai-debugger", undefined);
+				showCompletionSummary({
+					sessionId: session.id,
+					status: "aborted",
+					filesCleaned: summary.revertedCount,
+					logsCollected: abortLogCount,
+					fixCount: abortFixCount,
+				}, ctx);
 			} catch (err) {
 				ctx.ui.notify(`Abort failed: ${err instanceof Error ? err.message : String(err)}`, "error");
 			}
@@ -209,10 +268,17 @@ export default function (pi: ExtensionAPI) {
 	// ── Lifecycle ────────────────────────────────────────────────────────────
 
 	pi.on("session_start", async (_event, ctx) => {
+		widgetUI = ctx.ui;
 		// Restore active session from disk if present
 		const result = onSessionStart(lifecycleDeps);
 		if (result.notification) {
 			ctx.ui.notify(result.notification.message, result.notification.level);
+		}
+		// Attach widget if a session was restored
+		const restored = store.getActive();
+		if (restored) {
+			widgetManager.attach(restored);
+			renderWidget();
 		}
 	});
 
