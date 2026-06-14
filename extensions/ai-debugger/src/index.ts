@@ -34,6 +34,12 @@ import {
 	buildCleanupConfirmationMessage,
 	buildCleanupNotification,
 } from "./commands/cleanup.js";
+import {
+	buildAbortConfirmationTitle,
+	buildAbortConfirmationMessage,
+	buildAbortNotification,
+	performAbort,
+} from "./commands/abort.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -170,8 +176,25 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("debug abort", {
 		description: "Abort debug session and revert all changes (instrumentation + fixes).",
 		handler: async (_args, ctx) => {
-			// TODO: implement (TODO-7767f846)
-			ctx.ui.notify("No active debug session.", "info");
+			const session = store.getActive();
+			if (!session) {
+				ctx.ui.notify("No active debug session to abort.", "info");
+				return;
+			}
+			const confirmed = await ctx.ui.confirm(
+				buildAbortConfirmationTitle(session.id),
+				buildAbortConfirmationMessage(),
+			);
+			if (!confirmed) return;
+			try {
+				const summary = await performAbort(
+					{ store, collector, cwd: process.cwd() },
+				);
+				ctx.ui.notify(buildAbortNotification(summary), "info");
+				ctx.ui.setWidget("ai-debugger", undefined);
+			} catch (err) {
+				ctx.ui.notify(`Abort failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+			}
 		},
 	});
 
