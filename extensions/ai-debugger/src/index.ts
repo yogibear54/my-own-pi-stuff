@@ -29,6 +29,11 @@ import { createStatusTool } from "./tools/status.js";
 import { performStart, buildStartMessage, buildStartWidget } from "./commands/start.js";
 import { buildStatusNotification } from "./commands/status.js";
 import { buildLogsNotification, RECENT_LOG_COUNT } from "./commands/logs.js";
+import {
+	buildCleanupConfirmationTitle,
+	buildCleanupConfirmationMessage,
+	buildCleanupNotification,
+} from "./commands/cleanup.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -145,14 +150,17 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("No active debug session to clean up.", "info");
 				return;
 			}
+			const confirmed = await ctx.ui.confirm(
+				buildCleanupConfirmationTitle(session.id),
+				buildCleanupConfirmationMessage(),
+			);
+			if (!confirmed) return;
 			try {
 				const summary = await performCleanup(
 					{ store, collector, cwd: process.cwd() },
 				);
-				ctx.ui.notify(
-					`🐛 Cleanup complete: ${summary.files.filter((f) => f.cleaned).length} file(s) cleaned, ${summary.totalBlocksRemoved} block(s) removed.`,
-					"info",
-				);
+				ctx.ui.notify(buildCleanupNotification(summary), "info");
+				ctx.ui.setWidget("ai-debugger", undefined);
 			} catch (err) {
 				ctx.ui.notify(`Cleanup failed: ${err instanceof Error ? err.message : String(err)}`, "error");
 			}
