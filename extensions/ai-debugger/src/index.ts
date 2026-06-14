@@ -13,8 +13,6 @@ import { SessionStore } from "./session-store.js";
 import { loadConfig } from "./config.js";
 import type { DebugConfig } from "./config.js";
 import { LogCollector } from "./log-collector.js";
-import { detectProfiles } from "./language-profiles/index.js";
-import type { LanguageProfile } from "./language-profiles/index.js";
 import {
 	onSessionStart,
 	onSessionShutdown,
@@ -50,7 +48,6 @@ export default function (pi: ExtensionAPI) {
 	const store = new SessionStore(process.cwd());
 	const config: DebugConfig = loadConfig(process.cwd());
 	const collector = new LogCollector(process.cwd(), config.maxLogEntries);
-	const profiles: LanguageProfile[] = detectProfiles(process.cwd());
 	const lifecycleDeps = {
 		store,
 		collector,

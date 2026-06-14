@@ -26,7 +26,7 @@ import type { DebugSession } from "../types.js";
 import type { SessionStore } from "../session-store.js";
 import type { LogCollector } from "../log-collector.js";
 import type { DebugConfig } from "../config.js";
-import { detectProfiles } from "../language-profiles/index.js";
+import { detectProjectLanguage } from "../detect.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -132,14 +132,14 @@ export async function performStart(
 		await collector.start(config.port);
 	}
 
-	// Detect supported language profiles
-	const profiles = detectProfiles(cwd);
+	// Detect supported languages via manifest scanning
+	const detectedProfiles = detectProjectLanguage(cwd);
 
 	return {
 		sessionId: session.id,
 		description: session.description,
 		collectorPort: collector.listeningPort,
-		detectedProfiles: profiles.map((p) => p.name),
-		hasProfiles: profiles.length > 0,
+		detectedProfiles,
+		hasProfiles: detectedProfiles.length > 0,
 	};
 }
