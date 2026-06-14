@@ -20,6 +20,9 @@ export interface DebugConfig {
 	maxIterations: number;
 	/** Max log entries held in memory per session. Default: 10000 */
 	maxLogEntries: number;
+	/** Whether to show the debug-state context message in the conversation UI on each turn. Default: true
+	 *  When false, the message is still sent to the LLM but not displayed. */
+	showDebugContextMessage: boolean;
 }
 
 // ── Defaults ───────────────────────────────────────────────────────────────
@@ -28,6 +31,7 @@ export const DEFAULTS: Readonly<DebugConfig> = {
 	port: 19847,
 	maxIterations: 5,
 	maxLogEntries: 10000,
+	showDebugContextMessage: true,
 };
 
 // ── Loader ─────────────────────────────────────────────────────────────────
@@ -76,5 +80,9 @@ export function loadConfig(cwd: string): DebugConfig {
 			typeof user.maxIterations === "number" ? user.maxIterations : DEFAULTS.maxIterations,
 		maxLogEntries:
 			typeof user.maxLogEntries === "number" ? user.maxLogEntries : DEFAULTS.maxLogEntries,
+		showDebugContextMessage:
+			typeof user.showDebugContextMessage === "boolean"
+				? user.showDebugContextMessage
+				: DEFAULTS.showDebugContextMessage,
 	};
 }

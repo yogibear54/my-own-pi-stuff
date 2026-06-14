@@ -15,6 +15,11 @@ import type { DebugConfig } from "./config.js";
 import { LogCollector } from "./log-collector.js";
 import { detectProfiles } from "./language-profiles/index.js";
 import type { LanguageProfile } from "./language-profiles/index.js";
+import {
+	onSessionStart,
+	onSessionShutdown,
+	onBeforeAgentStart,
+} from "./lifecycle.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -23,6 +28,11 @@ export default function (pi: ExtensionAPI) {
 	const config: DebugConfig = loadConfig(process.cwd());
 	const collector = new LogCollector(process.cwd(), config.maxLogEntries);
 	const profiles: LanguageProfile[] = detectProfiles(process.cwd());
+	const lifecycleDeps = {
+		store,
+		collector,
+		showDebugContextMessage: config.showDebugContextMessage,
+	};
 
 	// ── Custom Tools (LLM-callable) ──────────────────────────────────────────
 
@@ -225,25 +235,21 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		// Restore active session from disk if present
-		const existing = store.findActiveOnDisk();
-		if (existing) {
-			store.restore(existing);
-			ctx.ui.notify(`🐛 Restored debug session: ${existing.id} (${existing.phase})`, "info");
+		const result = onSessionStart(lifecycleDeps);
+		if (result.notification) {
+			ctx.ui.notify(result.notification.message, result.notification.level);
 		}
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		const session = store.getActive();
-		if (session && session.status === "active") {
-			store.persist(session);
-			const fileCount = session.instrumentedFiles.length;
-			if (fileCount > 0) {
-				ctx.ui.notify(
-					`⚠️ Debug session ${session.id} is still active with instrumentation in ${fileCount} file(s). Run /debug cleanup before exiting.`,
-					"warning",
-				);
-			}
+		const result = await onSessionShutdown(lifecycleDeps);
+		if (result.notification) {
+			ctx.ui.notify(result.notification.message, result.notification.level);
 		}
-		await collector.stop();
+	});
+
+	pi.on("before_agent_start", async () => {
+		// Inject debug-state context so the LLM knows it's in a debug session
+		return onBeforeAgentStart(lifecycleDeps);
 	});
 }

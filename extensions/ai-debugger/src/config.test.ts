@@ -81,7 +81,14 @@ describe("loadConfig", () => {
 		it("all three fields override defaults when provided", () => {
 			writeConfig({ port: 3000, maxIterations: 8, maxLogEntries: 5000 });
 			const config = loadConfig(tmpDir);
-			expect(config).toEqual({ port: 3000, maxIterations: 8, maxLogEntries: 5000 });
+			expect(config).toEqual({ port: 3000, maxIterations: 8, maxLogEntries: 5000, showDebugContextMessage: true });
+		});
+
+		it("merges showDebugContextMessage when set", () => {
+			writeConfig({ showDebugContextMessage: false });
+			const config = loadConfig(tmpDir);
+			expect(config.showDebugContextMessage).toBe(false);
+			expect(config.port).toBe(DEFAULTS.port);
 		});
 	});
 
@@ -131,6 +138,12 @@ describe("loadConfig", () => {
 			writeConfig({ maxLogEntries: null });
 			const config = loadConfig(tmpDir);
 			expect(config.maxLogEntries).toBe(DEFAULTS.maxLogEntries);
+		});
+
+		it("falls back to default when showDebugContextMessage is a string", () => {
+			writeConfig({ showDebugContextMessage: "yes" });
+			const config = loadConfig(tmpDir);
+			expect(config.showDebugContextMessage).toBe(true);
 		});
 
 		it("handles multiple wrong types at once", () => {
