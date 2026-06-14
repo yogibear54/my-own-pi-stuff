@@ -26,6 +26,7 @@ import { createLogsTool } from "./tools/logs.js";
 import { createFixTool } from "./tools/fix.js";
 import { createCleanupTool, performCleanup } from "./tools/cleanup.js";
 import { createStatusTool } from "./tools/status.js";
+import { performStart, buildStartMessage, buildStartWidget } from "./commands/start.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -90,17 +91,21 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("debug start", {
 		description: "Start a debug session. Sets up log collector and session state.",
-		handler: async (_args, ctx) => {
-			// TODO: implement fully (TODO-415787ba)
-			if (store.getActive()) {
-				const active = store.getActive()!;
+		handler: async (args, ctx) => {
+			try {
+				const summary = await performStart(
+					{ store, collector, config, cwd: process.cwd() },
+					(args ?? "").trim(),
+				);
+				ctx.ui.notify(buildStartMessage(summary), "info");
+				const session = store.getActive()!;
+				ctx.ui.setWidget("ai-debugger", buildStartWidget(session));
+			} catch (err) {
 				ctx.ui.notify(
-					`A debug session is already active (${active.id}). Run /debug cleanup or /debug abort first.`,
+					`${err instanceof Error ? err.message : String(err)}`,
 					"warning",
 				);
-				return;
 			}
-			ctx.ui.notify("🐛 Debug session start not yet implemented", "info");
 		},
 	});
 
