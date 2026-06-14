@@ -25,6 +25,7 @@ import { createInstrumentTool } from "./tools/instrument.js";
 import { createLogsTool } from "./tools/logs.js";
 import { createFixTool } from "./tools/fix.js";
 import { createCleanupTool, performCleanup } from "./tools/cleanup.js";
+import { createStatusTool } from "./tools/status.js";
 
 export default function (pi: ExtensionAPI) {
 	// ── State ───────────────────────────────────────────────────────────────
@@ -79,25 +80,11 @@ export default function (pi: ExtensionAPI) {
 		}),
 	);
 
-	pi.registerTool({
-		name: "debug_status",
-		label: "Debug: Status",
-		description: "Return the current debug session state: phase, iteration, hypotheses, files modified, log count.",
-		parameters: Type.Object({}),
-		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
-			const session = store.getActive();
-			if (!session) {
-				return {
-					content: [{ type: "text", text: "No active debug session." }],
-					details: {},
-				};
-			}
-			return {
-				content: [{ type: "text", text: `Active session: ${session.id} (status tool not yet fully implemented)` }],
-				details: {},
-			};
-		},
-	});
+	pi.registerTool(
+		createStatusTool({
+			store,
+		}),
+	);
 
 	// ── Commands (User-facing) ───────────────────────────────────────────────
 
