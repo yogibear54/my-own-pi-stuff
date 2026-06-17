@@ -300,8 +300,8 @@ my-tutorial/
 
 | Import | Usage |
 |--------|-------|
-| `@mariozechner/pi-coding-agent` | Extension API types (`ExtensionAPI`, `ExtensionContext`) |
-| `@sinclair/typebox` | Runtime type schemas for tool parameters |
+| `@earendil-works/pi-coding-agent` | Extension API types (`ExtensionAPI`, `ExtensionContext`) |
+| `typebox` | Runtime type schemas for tool parameters |
 | `node:fs` | `existsSync`, `readFileSync`, `writeFileSync` |
 | `node:fs/promises` | `mkdir`, `mkdtemp`, `writeFile` |
 | `node:child_process` | `execSync` — git commands, tmux operations |

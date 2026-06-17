@@ -2,7 +2,7 @@
  * Pi tool definitions for code navigation.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { Store } from "./store.js";
 import type { CodeNavToolsConfig } from "./config.js";
 import type { WatcherHandle } from "./watcher.js";

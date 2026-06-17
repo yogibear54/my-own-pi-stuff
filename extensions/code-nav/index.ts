@@ -4,7 +4,7 @@
  * Provides go-to-definition, find-references, and symbol listing
  * powered by Tree-sitter with a persistent SQLite index.
  */
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -276,10 +276,7 @@ export default function (pi: ExtensionAPI) {
 		if (!isCodeNavEnabled(ctx.cwd)) {
 			// Disable code-nav tools so they don't appear in the tool list
 			const activeTools = pi.getActiveTools();
-			const filtered = activeTools
-				.filter((t) => !CODE_NAV_TOOLS.includes(t.name))
-				.map((t) => t.name);
-			pi.setActiveTools(filtered);
+			pi.setActiveTools(activeTools.filter((name) => !CODE_NAV_TOOLS.includes(name)));
 
 			if (ctx.hasUI) {
 				ctx.ui.notify(

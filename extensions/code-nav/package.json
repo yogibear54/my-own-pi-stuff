@@ -17,7 +17,7 @@
     "web-tree-sitter": "^0.26.8"
   },
   "devDependencies": {
-    "@sinclair/typebox": "^0.34.49",
+    "typebox": "^1.1.38",
     "typescript": "^6.0.2",
     "vitest": "^4.1.4"
   },
