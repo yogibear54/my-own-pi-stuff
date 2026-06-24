@@ -13,7 +13,7 @@ debugging loop.
 | Part | Module | Status |
 |---|---|---|
 | 1. HTTP log server | `server.ts` | ✅ done + tested |
-| 2. Slash commands `/debug` `/debug remote` `/debug stop` | `index.ts` | ✅ done (local + stop tested in pi; remote needs `ngrok`) |
+| 2. Slash commands `/debugger` `/debugger remote` `/debugger stop` | `index.ts` | ✅ done (local + stop tested in pi; remote needs `ngrok`) |
 | 3. Instrumentation widget | `widget.ts` | 🟡 **skeleton done + tested; visual design pending wireframes** |
 | 4. Snippet injection & cleanup tools | `snippets.ts` + `index.ts` | ✅ done + tested |
 | 5. Debugging loop (state machine + skill + tools) | `state.ts`, `skill/SKILL.md`, `index.ts` | ✅ done + tested |
@@ -42,9 +42,9 @@ After installing, `/reload` in Pi (or restart) to pick it up.
 
 | Command | Effect |
 |---|---|
-| `/debug` | Start a **local** session. Server on `:8866`; snippets target `http://localhost:8866`. Agent edits files directly. |
-| `/debug remote` | Start with an **ngrok** tunnel. Snippets target the public URL. Agent gives copy-paste patches (no remote edits). |
-| `/debug stop` | Stop the session: remove all telemetry snippets, stop server/tunnel, clear widget. **Keeps the fix and the log file.** |
+| `/debugger` | Start a **local** session. Server on `:8866`; snippets target `http://localhost:8866`. Agent edits files directly. |
+| `/debugger remote` | Start with an **ngrok** tunnel. Snippets target the public URL. Agent gives copy-paste patches (no remote edits). |
+| `/debugger stop` | Stop the session: remove all telemetry snippets, stop server/tunnel, clear widget. **Keeps the fix and the log file.** |
 
 The port is configurable via the `PI_DEBUG_PORT` env var.
 
@@ -95,7 +95,7 @@ node --experimental-strip-types scripts/smoke-test.ts        # server: 200/400/4
 node --experimental-strip-types scripts/state-test.ts        # state machine + attempt cap + serialize
 node --experimental-strip-types scripts/snippets-test.ts     # delimiters + byte-clean round-trip
 node --experimental-strip-types scripts/widget-test.ts       # 7-state widget rendering
-node --experimental-strip-types scripts/integration-test.ts  # full /debug flow via mock ExtensionAPI
+node --experimental-strip-types scripts/integration-test.ts  # full /debugger flow via mock ExtensionAPI
 ```
 
 The integration test bootstraps module resolution with transient symlinks and

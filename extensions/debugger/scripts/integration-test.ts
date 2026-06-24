@@ -121,8 +121,8 @@ async function main(): Promise<void> {
   const api = mockApi();
   dbg(api as unknown as never);
 
-  check("factory registers the /debug command + 8 debug tools", () => {
-    assert.ok(api.cmd("debug"), "/debug command registered");
+  check("factory registers the /debugger command + 8 debug tools", () => {
+    assert.ok(api.cmd("debugger"), "/debugger command registered");
     for (const t of ["inject_snippet", "remove_snippet", "list_snippets", "cleanup_all_snippets", "report_hypothesis", "request_user_test", "mark_bug_fixed", "debug_summary"]) {
       assert.ok(api.tool(t), `tool ${t} registered`);
     }
@@ -144,9 +144,9 @@ async function main(): Promise<void> {
     assert.ok(calls.setStatus.some(([k, v]) => k === "debugger" && v === undefined), "status cleared when inactive");
   });
 
-  // start a LOCAL debug session via /debug
-  await api.cmd("debug")!.handler("", ctx);
-  check("/debug (local) starts session: tools enabled, status set, editor prefilled, widget live", () => {
+  // start a LOCAL debug session via /debugger
+  await api.cmd("debugger")!.handler("", ctx);
+  check("/debugger (local) starts session: tools enabled, status set, editor prefilled, widget live", () => {
     assert.ok(api.activeToolList().includes("inject_snippet"), "debug tools enabled");
     assert.ok(calls.setStatus.some(([k]) => k === "debugger"), "status set");
     assert.ok(calls.setEditorText.length > 0, "editor text set");
@@ -226,10 +226,10 @@ async function main(): Promise<void> {
     assert.ok(!api.activeToolList().includes("inject_snippet"), "debug tools removed");
   });
 
-  // /debug stop is idempotent when not active
+  // /debugger stop is idempotent when not active
   const noopNotifyBefore = calls.notify.length;
-  await api.cmd("debug")!.handler("stop", ctx);
-  check("/debug stop when inactive is a soft no-op", () => {
+  await api.cmd("debugger")!.handler("stop", ctx);
+  check("/debugger stop when inactive is a soft no-op", () => {
     assert.ok(calls.notify.length > noopNotifyBefore, "notified");
   });
 

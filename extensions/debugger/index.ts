@@ -232,7 +232,7 @@ export default function debuggerExtension(pi: ExtensionAPI): void {
 
   async function startDebug(ctx: ExtensionContext, mode: DebugMode): Promise<void> {
     if (session.isActive()) {
-      ctx.ui.notify("A debug session is already active. Use /debug stop first.", "warning");
+      ctx.ui.notify("A debug session is already active. Use /debugger stop first.", "warning");
       return;
     }
     logsDir = join(ctx.cwd, CONFIG_DIR_NAME, "logs");
@@ -337,8 +337,8 @@ export default function debuggerExtension(pi: ExtensionAPI): void {
 
   // --- commands ------------------------------------------------------------
 
-  pi.registerCommand("debug", {
-    description: "Start a debug session (/debug | /debug remote | /debug stop)",
+  pi.registerCommand("debugger", {
+    description: "Start a debug session (/debugger | /debugger remote | /debugger stop)",
     getArgumentCompletions: (prefix: string) => {
       const opts = ["local", "remote", "stop"];
       const items = opts.map((o) => ({ value: o, label: o }));
@@ -350,7 +350,7 @@ export default function debuggerExtension(pi: ExtensionAPI): void {
       if (arg === "stop") return stopDebug(ctx);
       if (arg === "" || arg === "local") return startDebug(ctx, "local");
       if (arg === "remote") return startDebug(ctx, "remote");
-      ctx.ui.notify(`Unknown /debug argument: "${args}". Use local, remote, or stop.`, "warning");
+      ctx.ui.notify(`Unknown /debugger argument: "${args}". Use local, remote, or stop.`, "warning");
     },
   });
 
@@ -359,7 +359,7 @@ export default function debuggerExtension(pi: ExtensionAPI): void {
   function notActive(): { content: { type: "text"; text: string }[] } {
     return {
       content: [
-        { type: "text", text: "No active debug session. Start one with /debug (or /debug remote), then retry." },
+        { type: "text", text: "No active debug session. Start one with /debugger (or /debugger remote), then retry." },
       ],
     };
   }
@@ -462,7 +462,7 @@ export default function debuggerExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "cleanup_all_snippets",
     label: "Cleanup Snippets",
-    description: "Remove ALL telemetry snippets from every tracked file, keeping any applied fixes. Called automatically on /debug stop and when a bug is fixed.",
+    description: "Remove ALL telemetry snippets from every tracked file, keeping any applied fixes. Called automatically on /debugger stop and when a bug is fixed.",
     promptSnippet: "Remove all telemetry snippets, keep fixes",
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {

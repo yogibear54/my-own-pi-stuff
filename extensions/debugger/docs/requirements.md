@@ -23,9 +23,9 @@ The debugger dynamically scales its interaction model based on where the applica
 
 | Command | Environment Mode | Telemetry Hook | Code Execution Strategy   |
 | :---- | :---- | :---- | :---- |
-| /debug | Local Mode | Routes telemetry directly to localhost:8080. | **Automated:** The agent utilizes internal file/source manipulation tools to modify code files inside the working directory automatically. |
-| /debug remote | Remote Mode | Routes telemetry via an ngrok public tunnel back to Port 8866\. | **Instructional:** The agent generates precise, copy-pasteable code patches and asks the user to manually apply them to the remote environment. |
-| /debug stop | All | None | Terminates the active debugging session and cleans up any injected telemetry hooks. |
+| /debugger | Local Mode | Routes telemetry directly to localhost:8080. | **Automated:** The agent utilizes internal file/source manipulation tools to modify code files inside the working directory automatically. |
+| /debugger remote | Remote Mode | Routes telemetry via an ngrok public tunnel back to Port 8866\. | **Instructional:** The agent generates precise, copy-pasteable code patches and asks the user to manually apply them to the remote environment. |
+| /debugger stop | All | None | Terminates the active debugging session and cleans up any injected telemetry hooks. |
 
 ## **4\. Core Automation Loops**
 

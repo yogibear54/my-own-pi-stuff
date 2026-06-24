@@ -72,7 +72,7 @@ feel.
 
 ## Acceptance Criteria
 
-1. Widget renders above the editor only while a debug session is active; gone after `/debug stop`.
+1. Widget renders above the editor only while a debug session is active; gone after `/debugger stop`.
 2. Header shows current state, port (8866 or ngrok URL), and a `LIVE LOGGING` indicator that
    appears while packets are arriving.
 3. Hypothesis region shows the current hypothesis + counter; counter increments on failed fixes.

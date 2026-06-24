@@ -93,7 +93,7 @@ user-gated rather than the model guessing.
 
 ## Acceptance Criteria
 
-1. Starting `/debug` with no context lands the widget in `AWAITING CONTEXT`.
+1. Starting `/debugger` with no context lands the widget in `AWAITING CONTEXT`.
 2. A pasted stack trace skips ambiguity and lets the model report a hypothesis directly.
 3. Each failed fix increments `hypothesisCount`, removes the prior fix+snippets, and forms a new
    hypothesis.

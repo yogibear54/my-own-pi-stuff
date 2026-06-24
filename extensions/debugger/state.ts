@@ -232,7 +232,7 @@ export class DebugSession {
 
   private assertActive(): void {
     if (!this.state.active) {
-      throw new Error("Debug session is not active. Start it with /debug first.");
+      throw new Error("Debug session is not active. Start it with /debugger first.");
     }
   }
 

@@ -1,12 +1,12 @@
 ---
 name: debugger
-description: Autonomous debugging loop for the Pi AI Debugger extension. Use when a debug session is active (/debug) to gather context, form a hypothesis, validate it via injected telemetry, fix the bug, and clean up. Provides the telemetry packet schema and snippet format.
+description: Autonomous debugging loop for the Pi AI Debugger extension. Use when a debug session is active (/debugger) to gather context, form a hypothesis, validate it via injected telemetry, fix the bug, and clean up. Provides the telemetry packet schema and snippet format.
 ---
 
 # Pi AI Debugger — Debugging Loop Skill
 
-Use this skill **only while a debug session is active** (started with `/debug` or
-`/debug remote`). The extension keeps the live state (current phase, hypothesis
+Use this skill **only while a debug session is active** (started with `/debugger` or
+`/debugger remote`). The extension keeps the live state (current phase, hypothesis
 counter, attempts left, telemetry target) and shows it in the instrumentation
 widget above the editor.
 
@@ -84,6 +84,6 @@ never nested. `cleanup_all_snippets` removes every snippet but **never** your fi
 
 ## Remote mode
 
-In `/debug remote` the codebase is **not** local — do not edit files directly.
+In `/debugger remote` the codebase is **not** local — do not edit files directly.
 Instead emit copy-pasteable patches (a fenced code block with the target file
 path) and ask the user to apply them on the remote host.
