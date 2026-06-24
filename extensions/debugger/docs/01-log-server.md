@@ -29,11 +29,11 @@ in-memory ring buffer of recent packets to feed the instrumentation widget.
 - Default port **8866**. Configurable (constructor option; e.g. wired from settings/env).
 - `session_start` is the safe place to start a background socket (do **not** start it from the
   extension factory — see Pi docs on long-lived resources). For this extension, start it from
-  the `/debug` command instead (lazy start), and tear down on `/debug stop` / `session_shutdown`.
+  the `/debugger` command instead (lazy start), and tear down on `/debugger stop` / `session_shutdown`.
 
 ### Log file
 
-- Created **once per `/debug` session** under `<cwd>/.pi/logs/`.
+- Created **once per `/debugger` session** under `<cwd>/.pi/logs/`.
   - Use `CONFIG_DIR_NAME` (rebrands may not use `.pi`) instead of hardcoding.
   - `mkdir -p` the directory if missing.
 - Filename: 8 alphanumeric chars + `.log`, e.g. `ab3k91xz.log`. Generate with
@@ -74,9 +74,9 @@ missing/wrong-typed):
 
 | Event | Action |
 |---|---|
-| `/debug` (or `/debug remote`) | `mkdir` logs dir, create session log file, `server.listen(8866)` |
-| `/debug remote` | additionally start ngrok tunnel to 8866 |
-| `/debug stop` | flush, `server.close()`, drop buffer |
+| `/debugger` (or `/debugger remote`) | `mkdir` logs dir, create session log file, `server.listen(8866)` |
+| `/debugger remote` | additionally start ngrok tunnel to 8866 |
+| `/debugger stop` | flush, `server.close()`, drop buffer |
 | `session_shutdown` | ensure server closed (idempotent) |
 
 ## Acceptance Criteria
@@ -87,7 +87,7 @@ missing/wrong-typed):
 3. `curl -X POST localhost:8866 -d '{}'` (missing required fields) → `400`.
 4. `curl localhost:8866` (GET) → `405` with `Allow: POST`.
 5. A second valid POST in the same session appends to the **same** file as a new line.
-6. `/debug stop` closes the listener (subsequent POSTs fail to connect).
+6. `/debugger stop` closes the listener (subsequent POSTs fail to connect).
 7. Directory `/.pi/logs/` is auto-created when absent.
 
 ## Dependencies / Open Items

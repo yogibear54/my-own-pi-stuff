@@ -15,15 +15,16 @@ LLM debugging loop (context → hypothesis → test → fix → cleanup).
 |---|---|---|
 | Server listening port | **8866** for both local and remote modes | Spec conflict resolved → Server section authoritative |
 | Port configurability | Yes, overridable (e.g. env / settings) | Requirements |
-| Log file model | **One file per `/debug` session**, appended as JSONL at `.pi/logs/<random8>.log` | Spec ambiguity resolved |
+| Log file model | **One file per `/debugger` session**, appended as JSONL at `.pi/logs/<random8>.log` | Spec ambiguity resolved |
 | Widget placement | Above the editor (`ctx.ui.setWidget`, default placement) | Requirements |
+| Command name | **`/debugger`** (not `/debug`) — pi's built-in `/debug` intercepts in the TUI before extensions run | Built-in conflict, pi 0.80.2 |
 
 ## Parts
 
 The extension decomposes into 5 separable parts. Each has its own design doc:
 
 1. **[HTTP Log Server](./01-log-server.md)** — receives POST telemetry, validates JSON, persists JSONL.
-2. **[Slash Commands](./02-slash-commands.md)** — `/debug`, `/debug remote`, `/debug stop`.
+2. **[Slash Commands](./02-slash-commands.md)** — `/debugger`, `/debugger remote`, `/debugger stop`.
 3. **[Instrumentation Widget](./03-instrumentation-widget.md)** — the 7-state live telemetry panel (⚠ blocked on wireframes).
 4. **[Snippet Injection & Cleanup](./04-snippet-injection-cleanup.md)** — delimited logging snippets the LLM injects/removes.
 5. **[Debugging Loop](./05-debugging-loop.md)** — the context→hypothesis→test→fix→cleanup state machine.
@@ -41,10 +42,10 @@ HTTP Log Server (:8866)  ──append──►  .pi/logs/<session>.log  (JSONL)
    └─  LLM debugging loop reads logs + widget state to form/refine hypothesis & fix
 ```
 
-- **Local mode** (`/debug`): telemetry target is `http://localhost:8866`. Agent edits files directly.
-- **Remote mode** (`/debug remote`): an ngrok tunnel fronts `:8866`; the agent gives the user a public
+- **Local mode** (`/debugger`): telemetry target is `http://localhost:8866`. Agent edits files directly.
+- **Remote mode** (`/debugger remote`): an ngrok tunnel fronts `:8866`; the agent gives the user a public
   URL and provides **copy-pasteable patches** (it does not edit the remote codebase).
-- **Stop** (`/debug stop`): remove all injected snippets, stop server/tunnel, clear widget, exit loop.
+- **Stop** (`/debugger stop`): remove all injected snippets, stop server/tunnel, clear widget, exit loop.
 
 ## Proposed Extension Layout
 
@@ -81,5 +82,5 @@ the [`plan-mode`](../examples/extensions/plan-mode/index.ts) reference extension
 - **Instrumentation widget wireframes** — required before finalizing the widget layout
   (see [03-instrumentation-widget.md](./03-instrumentation-widget.md)). A basic skeleton can be
   built now; visual design waits for the images.
-- **ngrok availability** — `/debug remote` assumes the `ngrok` binary is installed; behavior if
+- **ngrok availability** — `/debugger remote` assumes the `ngrok` binary is installed; behavior if
   absent needs defining (graceful fallback vs. error).

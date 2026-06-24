@@ -69,7 +69,7 @@ ngrok URL remote). `source.line` should be the line where the snippet sits.
 
 ### `cleanup_all_snippets`
 
-- No params. Removes every tracked snippet in the session (called by `/debug stop` and on fix
+- No params. Removes every tracked snippet in the session (called by `/debugger stop` and on fix
   acceptance). Keeps the actual fix code (snippets ≠ fix).
 
 ## Prompt guidance
@@ -83,7 +83,7 @@ Register `promptSnippet` + `promptGuidelines` on these tools so the model:
 
 ## Tracking
 
-Maintain a session map of `{ id → { file, name, line } }` so `/debug stop` and "remove on failed
+Maintain a session map of `{ id → { file, name, line } }` so `/debugger stop` and "remove on failed
 fix" are deterministic even if the model forgets a file. Persist via `appendEntry` (Part 5) so a
 `/resume` can still clean up.
 
