@@ -6,17 +6,15 @@
     "part-2",
     "commands"
   ],
-  "status": "open",
+  "status": "done",
   "created_at": "2026-06-24T00:53:43.432Z"
 }
 
-Implement the three lifecycle commands. **Reference: [docs/02-slash-commands.md](docs/02-slash-commands.md).**
+Done. `/debug`, `/debug remote`, `/debug stop` implemented as a single `debug` command parsing args (local|remote|stop), with argument completions.
 
-Scope:
-- `/debug` (local): start server on 8866, telemetry target `http://localhost:8866`, enter debug state, show widget, activate debug tools/skill, prompt for bug context.
-- `/debug remote`: start `ngrok http 8866`, scrape public URL (graceful error if `ngrok` missing), instructional mode (no remote edits — copy-paste patches), surface URL in widget.
-- `/debug stop`: run snippet cleanup (Part 4), stop ngrok, close server (Part 1), clear widget + footer status, reset + persist state, keep the log file. Idempotent.
+Verified in the real pi runtime + integration test:
+- `/debug` (local): starts server on 8866 (or PI_DEBUG_PORT), telemetry target http://localhost:PORT, enters debug state, shows widget, activates the 8 debug tools, prefills editor prompt.
+- `/debug stop`: runs cleanup_all_snippets (keeps fix), stops ngrok, closes server, clears widget+status, restores tools, retains the log file. Idempotent (soft no-op when inactive).
+- baseline session_start + before_agent_start validated via `pi -p`.
 
-Verify Pi's tokenization of `/debug remote` vs `/debug stop` (single `debug` command parsing args vs two commands).
-
-Acceptance criteria: see doc §Acceptance Criteria.
+Remote (`/debug remote`): implemented defensively (spawns `ngrok http <port>`, scrapes public URL from the ngrok API at :4040; on missing/failed ngrok it closes the server and notifies an error without crashing). NOT exercised here because ngrok isn't installed in this env — needs a real run with ngrok present. Local + remote share port 8866 per the locked decision.
