@@ -19,6 +19,7 @@
  * Snippet injection and the full debugging loop arrive in later parts (docs/04..05).
  */
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { rmSync } from "node:fs";
 
 import { startLogServer, type LogServerHandle, type TelemetryPacket } from "./server.ts";
 import { LogStreamOverlay } from "./logstream.ts";
@@ -129,8 +130,11 @@ function stopDebug(ctx: ExtensionContext): void {
 		return;
 	}
 	if (serverHandle) {
+		const logFile = serverHandle.logFile;
 		serverHandle.close();
 		serverHandle = null;
+		// Clear this session's per-session JSONL log file.
+		rmSync(logFile, { force: true });
 	}
 	packets.length = 0;
 	if (activeOverlay) {
