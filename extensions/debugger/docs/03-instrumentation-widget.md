@@ -13,11 +13,16 @@ which matches the default above-editor widget region.
 1. **Header** — current debug status state, `LIVE LOGGING` indicator (when packets are flowing),
    inbound port info (and ngrok URL in remote mode). For local frontend JS/TS the user can
    `fetch()` the endpoint directly — surface that hint.
-2. **Hypothesis statement** — static display of the current hypothesis under test + a hypothesis
-   counter (increments each time a fix fails and a new hypothesis is formed).
-3. **Log stream** — pretty-printed recent packets; scrollable, can scroll back to review history.
+2. **Bug summary** — a `BUG` label on its own line followed by one or more indented lines
+   summarizing the bug under investigation. Empty (placeholder) until the bug is described.
+   The summary may span multiple lines (`DebugSnapshot.bug: string[]`).
+3. **Hypothesis statement** — static display of the current hypothesis under test + a hypothesis
+   counter (increments each time a fix fails and a new hypothesis is formed). The hypothesis may
+   span multiple lines (`DebugSnapshot.hypothesis: string[]`); the label + counter sit on the
+   header line, each hypothesis line indented below.
+4. **Log stream** — pretty-printed recent packets; scrollable, can scroll back to review history.
    Only shown when injected snippets are active and emitting.
-4. **Body** — multi-purpose scrollable area: LLM questions, next-step prompts, and response
+5. **Body** — multi-purpose scrollable area: LLM questions, next-step prompts, and response
    confirmation affordances ("Bug Fixed" / "Continue to Debug").
 
 ## Instrumentation States (7)
@@ -77,14 +82,17 @@ is therefore split into two surfaces, both now implemented:
 1. Widget renders above the editor only while a debug session is active; gone after `/debugger stop`.
 2. Header shows current state, port (8866 or ngrok URL), and a `LIVE LOGGING` indicator that
    appears while packets are arriving.
-3. Hypothesis region shows the current hypothesis + counter; counter increments on failed fixes.
-4. Log stream shows pretty-printed packets (compact one-liner tail in-widget; expanded block
+3. Bug summary region shows the current bug description; placeholder until the bug is described,
+   and supports multi-line summaries.
+4. Hypothesis region shows the current hypothesis + counter; counter increments on failed fixes.
+   The hypothesis may span multiple lines.
+5. Log stream shows pretty-printed packets (compact one-liner tail in-widget; expanded block
    in the `/debugger logs` overlay) and updates live as packets arrive.
-5. The overlay scrolls back through full history (`↑/↓`, `PgUp/PgDn`, `Home/End`),
+6. The overlay scrolls back through full history (`↑/↓`, `PgUp/PgDn`, `Home/End`),
    live-follows while pinned to the bottom, and closes with `q`/`Esc`.
-6. Body shows the LLM's current question/affordance appropriate to the state.
-7. Theme changes (e.g. `/theme`) update the widget without artifacts.
-8. State transitions (Part 5) immediately update the rendered widget.
+7. Body shows the LLM's current question/affordance appropriate to the state.
+8. Theme changes (e.g. `/theme`) update the widget without artifacts.
+9. State transitions (Part 5) immediately update the rendered widget.
 
 ## Dependencies / Open Items
 

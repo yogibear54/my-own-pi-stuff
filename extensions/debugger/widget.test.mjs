@@ -4,7 +4,7 @@
  * Run: `node widget.test.mjs` (Node ≥ 22.6 type-stripping). widget.ts is pure
  * (type-only imports), so no SDK resolution is needed.
  */
-import { formatPacketCompact, formatPacketExpanded, TAIL_LIMIT } from "./widget.ts";
+import { formatPacketCompact, formatPacketExpanded, initialSnapshot, renderDebugWidget, TAIL_LIMIT } from "./widget.ts";
 
 let failures = 0;
 function ok(cond, msg) {
@@ -78,6 +78,44 @@ console.log("\n[formatPacketExpanded]");
 
 console.log("\n[TAIL_LIMIT]");
 eq(TAIL_LIMIT, 3, "TAIL_LIMIT is 3");
+
+console.log("\n[renderDebugWidget BUG lines]");
+{
+	const snap = initialSnapshot();
+	const out = renderDebugWidget(snap, theme);
+	eq(Array.isArray(out), true, "render returns an array of lines");
+	// Match the warning-wrapped label: the header's "DEBUG" also contains the substring "BUG".
+	const bugIdx = out.findIndex((l) => l.includes("<warning>BUG</warning>"));
+	const hypIdx = out.findIndex((l) => l.includes("HYPOTHESIS"));
+	ok(bugIdx >= 0 && hypIdx >= 0 && bugIdx < hypIdx, "BUG label renders above HYPOTHESIS");
+	eq(snap.bug.length, 0, "initial bug is an empty array");
+	ok(out[bugIdx + 1].includes("No bug described yet"), "empty bug → placeholder line");
+
+	// Multiline bug summary: each entry on its own indented line under the label.
+	snap.bug = ["Login fails for users with an empty email", "Only affects OAuth sign-in"];
+	const out2 = renderDebugWidget(snap, theme);
+	const bugIdx2 = out2.findIndex((l) => l.includes("<warning>BUG</warning>"));
+	ok(out2[bugIdx2 + 1].includes("Login fails for users with an empty email"), "first bug line rendered");
+	ok(out2[bugIdx2 + 2].includes("Only affects OAuth sign-in"), "second bug line rendered");
+	ok(!out2[bugIdx2 + 1].includes("No bug described yet"), "placeholder hidden once bug is set");
+}
+
+console.log("\n[renderDebugWidget HYPOTHESIS lines]");
+{
+	const snap = initialSnapshot();
+	let out = renderDebugWidget(snap, theme);
+	let hypIdx = out.findIndex((l) => l.includes("HYPOTHESIS"));
+	eq(snap.hypothesis.length, 0, "initial hypothesis is an empty array");
+	ok(out[hypIdx + 1].includes("No hypothesis yet"), "empty hypothesis → placeholder line");
+
+	snap.hypothesis = ["Null deref in validate()", "when email is undefined"];
+	snap.hypothesisCount = 2;
+	out = renderDebugWidget(snap, theme);
+	hypIdx = out.findIndex((l) => l.includes("HYPOTHESIS"));
+	ok(out[hypIdx].includes("<muted>#2</muted>"), "hypothesis counter rendered");
+	ok(out[hypIdx + 1].includes("Null deref in validate()"), "first hypothesis line rendered");
+	ok(out[hypIdx + 2].includes("when email is undefined"), "second hypothesis line rendered");
+}
 
 console.log(`\n${failures === 0 ? "ALL PASSED" : failures + " FAILURE(S)"}`);
 process.exit(failures === 0 ? 0 : 1);

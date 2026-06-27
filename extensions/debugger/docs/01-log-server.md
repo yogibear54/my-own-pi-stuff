@@ -76,7 +76,7 @@ missing/wrong-typed):
 |---|---|
 | `/debugger` (or `/debugger remote`) | `mkdir` logs dir, create session log file, `server.listen(8866)` |
 | `/debugger remote` | additionally start ngrok tunnel to 8866 |
-| `/debugger stop` | flush, `server.close()`, drop buffer |
+| `/debugger stop` | flush, `server.close()`, drop buffer, delete session log file |
 | `session_shutdown` | ensure server closed (idempotent) |
 
 ## Acceptance Criteria

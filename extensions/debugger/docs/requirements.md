@@ -147,9 +147,13 @@ Provides status of the current debugger.  Should include:
 * Port information for inbounds ports for the debugger to receive data  
 * NOTE:  On local, if you are debugging a frontend script like JS or TS, you can post/fetch to the endpoint given
 
+#### **Bug Summary**
+
+This is where the description of the bug being investigated will reside.  It is a static display of what the bug is, and can span multiple lines.  It will be empty until the LLM has enough context to describe the bug.  
+
 #### **Hypothesis Statement**
 
-This is where the hypothesis will reside.  Its just a static display of what the hypothesis is that we are testing.  There will also be a hypothesis counter, if a solution fails, the LLM will need to create another hypothesis to test, so this is the counter for that.  
+This is where the hypothesis will reside.  Its just a static display of what the hypothesis is that we are testing, and can span multiple lines.  There will also be a hypothesis counter, if a solution fails, the LLM will need to create another hypothesis to test, so this is the counter for that.  
 
 #### **Log Stream**
 

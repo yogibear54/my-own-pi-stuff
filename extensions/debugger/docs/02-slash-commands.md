@@ -47,9 +47,10 @@ Three commands drive the debug lifecycle and select the telemetry/execution topo
    during the session (Part 4), keeping any accepted fix.
 2. Stop ngrok tunnel (if remote).
 3. Close the log server (Part 1).
-4. Clear the instrumentation widget (`ctx.ui.setWidget("debugger", undefined)`) and footer status.
-5. Reset state machine; persist cleared state.
-6. Notify "Debug session stopped."
+4. Delete the per-session JSONL log file created for this session.
+5. Clear the instrumentation widget (`ctx.ui.setWidget("debugger", undefined)`) and footer status.
+6. Reset state machine; persist cleared state.
+7. Notify "Debug session stopped."
 
 ## Argument handling
 
@@ -74,7 +75,7 @@ works. `/debugger stop` is handled as a trailing arg in the same handler. Keep `
 3. `/debugger remote` errors gracefully (no crash) if `ngrok` is not installed.
 4. `/debugger stop` removes injected snippets, stops server/tunnel, clears widget, restores normal tools.
 5. `/debugger stop` is idempotent (calling when not debugging is a no-op with an info notify).
-6. Stopping does **not** delete the session log file (logs persist per requirements).
+6. `/debugger stop` deletes the per-session JSONL log file created for the session.
 
 ## Dependencies / Open Items
 
