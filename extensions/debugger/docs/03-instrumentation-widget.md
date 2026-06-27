@@ -2,13 +2,6 @@
 
 > Part of the [Pi AI Debugger](./ARCHITECTURE.md). Source requirements: `requirements.md` → "Instrumentation", "Instrumentation States", "Instrumentation Layout Requirements".
 
-## ⚠ Blocked on wireframes
-
-The requirements explicitly state wireframes exist and should be requested. The **visual
-layout is provisional** until those images are provided. A functional skeleton (correct
-placement + state-aware content) can be built now; final styling/scrolled windows follow the
-wireframes.
-
 ## Placement
 
 Above the editor via `ctx.ui.setWidget("debugger", renderFn)` (default `placement: "aboveEditor"`).
@@ -49,26 +42,35 @@ which matches the default above-editor widget region.
   rebuild on invalidate).
 - Wire packet buffer from Part 1 (`onPacket`) → `requestRender`/invalidate the widget.
 
-## Scroll-back constraint (design note)
+## Scroll-back (resolved)
 
-`setWidget` render objects support `{ render, invalidate }` but **not** `handleInput`, so the
-widget itself can't capture keystrokes for scrolling. Options:
+Always-on widgets are hard-capped at `MAX_WIDGET_LINES = 10` and are **never focusable**
+(the editor always holds focus), so they cannot capture scroll keystrokes. The log stream
+is therefore split into two surfaces, both now implemented:
 
-- **A (default skeleton):** fixed tail window — show the last N pretty-printed packets, newest
-  at the bottom; auto-scrolls. Simple, ships now, no scroll-back.
-- **B (full scroll-back, post-wireframes):** take over with `ctx.ui.custom()` / an overlay when
-  the user wants to scroll, or reserve a key that pops the log stream into a scrollable custom
-  component. Decide after seeing wireframes.
-
-Recommend **A now**, upgrade to **B** once the wireframes clarify how scroll-back is meant to
-feel.
+- **In-widget tail** (`widget.ts`): the last `TAIL_LIMIT` (3) packets as compact one-liners
+  (`LEVEL file:line fn — message`), newest at the bottom, plus a hint line
+  `↑ /debugger logs to scroll history (N total)`. Shares the 10-line widget budget with the
+  header/hypothesis/body, so in practice 2–3 packets fit.
+- **Scroll overlay** (`logstream.ts`): a focusable `ctx.ui.custom({ overlay: true })` component
+  (`LogStreamOverlay` implements pi-tui `Focusable`) showing **expanded** packets with full
+  session history. Opened via `/debugger logs` and auto-opened on `/debugger` start.
+  Keys: `↑/↓` line, `PgUp/PgDn` page, `Home/End` jump, `q/Esc` close. **Live-follow**: when
+  pinned to the bottom (default) the view advances as new packets arrive; scrolling up pauses
+  follow so the view stays put. New packets live-refresh the open overlay via `tui.requestRender()`
+  (called from `onPacket`).
 
 ## API touchpoints
 
-- `ctx.ui.setWidget("debugger", fn)` / `ctx.ui.setWidget("debugger", undefined)` to clear.
+- `ctx.ui.setWidget("debugger", lines)` (string-array form) for the always-on widget.
+- `ctx.ui.custom((tui, theme, kb, done) => component, { overlay: true, overlayOptions })` for the
+  scroll overlay; `done()` closes it. See `examples/extensions/overlay-test.ts` / `snake.ts`.
 - `ctx.ui.setStatus("debugger", ...)` for a footer chip.
-- State machine (Part 5) drives which region/state renders.
-- Packet buffer (Part 1) feeds the log stream.
+- `/debugger` starts the log server (`server.ts`) and opens the overlay; `/debugger logs` reopens
+  it; `/debugger stop` closes server + overlay + widget.
+- The server's `onPacket(packet)` callback pushes to the session packet buffer, repaints the
+  widget tail, and calls `overlay.refresh()` when open. UI context is captured on `session_start`
+  (the safe place for out-of-command repaints).
 
 ## Acceptance Criteria
 
@@ -76,13 +78,19 @@ feel.
 2. Header shows current state, port (8866 or ngrok URL), and a `LIVE LOGGING` indicator that
    appears while packets are arriving.
 3. Hypothesis region shows the current hypothesis + counter; counter increments on failed fixes.
-4. Log stream shows pretty-printed packets (level, source, message, key variables) and updates live.
-5. Body shows the LLM's current question/affordance appropriate to the state.
-6. Theme changes (e.g. `/theme`) update the widget without artifacts.
-7. State transitions (Part 5) immediately update the rendered widget.
+4. Log stream shows pretty-printed packets (compact one-liner tail in-widget; expanded block
+   in the `/debugger logs` overlay) and updates live as packets arrive.
+5. The overlay scrolls back through full history (`↑/↓`, `PgUp/PgDn`, `Home/End`),
+   live-follows while pinned to the bottom, and closes with `q`/`Esc`.
+6. Body shows the LLM's current question/affordance appropriate to the state.
+7. Theme changes (e.g. `/theme`) update the widget without artifacts.
+8. State transitions (Part 5) immediately update the rendered widget.
 
 ## Dependencies / Open Items
 
-- **Wireframes** (layout, sizing, color emphasis).
-- Deciding option A vs B for scroll-back.
-- Pretty-print format for a packet (compact one-liner vs. expanded block) — pending wireframes.
+- **Wireframes** (final layout/sizing/color emphasis) — functional skeleton + scroll overlay
+  are in place; visual polish follows the wireframes.
+- The in-widget tail shares pi's 10-line widget cap (2–3 packets); the overlay is the full
+  viewer. No line-wrapping in the overlay yet (long `message`/`stack_trace` may clip).
+- The overlay captures its theme at open time; a live `/theme` switch mid-overlay won't restyle
+  it (reopen to refresh).
