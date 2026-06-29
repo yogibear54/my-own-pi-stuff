@@ -52,17 +52,33 @@ Three commands drive the debug lifecycle and select the telemetry/execution topo
 6. Reset state machine; persist cleared state.
 7. Notify "Debug session stopped."
 
+### `/debugger bug [text]`
+
+User override for the bug summary shown in the instrumentation widget (the LLM-side path is the
+`report_bug` tool). No mode/telemetry change.
+
+1. If no active session → notify "No active debug session." and abort.
+2. With trailing text → set the widget bug summary to that text (single-line; multi-line
+   summaries come via `report_bug`).
+3. Bare (`/debugger bug`) → open `ctx.ui.input("Edit bug summary", currentBug)`; `ui.input` has
+   no prefill, so the current bug is shown as placeholder hint text. A blank/empty result clears
+   the bug (`null`).
+4. Repaint the widget and notify "Bug summary updated." / "Bug summary cleared."
+
 ## Argument handling
 
-`/debugger` accepts an optional trailing arg: `local` (default) or `remote`, so `/debugger remote`
-works. `/debugger stop` is handled as a trailing arg in the same handler. Keep `/debugger` (no arg)
+`/debugger` accepts an optional trailing arg parsed in a single handler: `local` (default),
+`remote`, `stop`, `logs`, or `bug [text]`. `/debugger bug` with no text opens an edit prompt
+(current bug as placeholder); with text it sets the bug summary directly. Keep `/debugger` (no arg)
 = local to match the spec table exactly.
 
 ## API touchpoints
 
 - `pi.registerCommand("debugger", ...)` — single command; the handler parses `args`
-  (`local` | `remote` | `stop`). Confirmed: pi routes trailing words after a slash command as the
-  `args` string, so `/debugger remote` and `/debugger stop` both reach the one handler.
+  (`local` | `remote` | `stop` | `logs` | `bug [text]`). Confirmed: pi routes trailing words after
+  a slash command as the `args` string, so `/debugger remote`, `/debugger stop`, and
+  `/debugger bug ...` all reach the one handler.
+- `pi.registerTool({ name: "report_bug", ... })` — LLM-side producer for the bug summary.
 - The command name is `debugger`, **not** `debug` — see Open Items (built-in `/debug` conflict).
 - `pi.exec` for ngrok.
 - `pi.appendEntry` / state machine (Part 5) for session state.
@@ -76,6 +92,9 @@ works. `/debugger stop` is handled as a trailing arg in the same handler. Keep `
 4. `/debugger stop` removes injected snippets, stops server/tunnel, clears widget, restores normal tools.
 5. `/debugger stop` is idempotent (calling when not debugging is a no-op with an info notify).
 6. `/debugger stop` deletes the per-session JSONL log file created for the session.
+7. `/debugger bug [text]` sets the widget bug summary (bare opens an edit prompt; blank clears it);
+   the LLM `report_bug(summary)` tool updates the same field. Both are inert (info notify) with no
+   active session.
 
 ## Dependencies / Open Items
 
@@ -85,7 +104,7 @@ works. `/debugger stop` is handled as a trailing arg in the same handler. Keep `
   router (`if (text === "/debug")`) *before* extension commands are consulted, so an
   extension registering `debug` can never receive `/debug`. Confirmed in pi 0.80.2.
   The extension therefore registers `debugger` and the command parses trailing args
-  (`remote` | `stop`) in a single handler. (The requirements table originally said
+  (`remote` | `stop` | `logs` | `bug [text]`) in a single handler. (The requirements table originally said
   `/debug`; this is the reason it was renamed.)
 - Decide remote-mode "instructional patch" format (unified diff? fenced code block?). Recommend
   fenced code block with file path header for copy-paste ergonomics; finalize in Part 4/5.

@@ -34,10 +34,10 @@ export interface DebugSnapshot {
 	telemetryTarget: string;
 	/** True while packets are actively arriving. */
 	liveLogging: boolean;
-	/** Summary lines of the bug under investigation; empty before it's described. */
-	bug: string[];
-	/** Current hypothesis under test as lines; empty before one is formed. */
-	hypothesis: string[];
+	/** Summary of the bug under investigation, or null before it's described. Newlines split lines. */
+	bug: string | null;
+	/** Current hypothesis under test, or null before one is formed. Newlines split lines. */
+	hypothesis: string | null;
 	/** Increments each time a fix fails and a new hypothesis is formed. */
 	hypothesisCount: number;
 	/** Total packets received this session (drives the "N total" hint). */
@@ -58,8 +58,8 @@ export function initialSnapshot(): DebugSnapshot {
 		port: DEFAULT_PORT,
 		telemetryTarget: `http://localhost:${DEFAULT_PORT}`,
 		liveLogging: false,
-		bug: [],
-		hypothesis: [],
+		bug: null,
+		hypothesis: null,
 		hypothesisCount: 0,
 		logCount: 0,
 		logLines: [],
@@ -148,10 +148,10 @@ export function renderDebugWidget(snapshot: DebugSnapshot, theme: Theme): string
 
 	// --- Bug summary ---
 	lines.push(theme.fg("warning", theme.bold("BUG")));
-	if (snapshot.bug.length === 0) {
+	if (snapshot.bug === null) {
 		lines.push(`  ${theme.fg("dim", "No bug described yet.")}`);
 	} else {
-		for (const line of snapshot.bug) lines.push(`  ${line}`);
+		for (const line of snapshot.bug.split("\n")) lines.push(`  ${line}`);
 	}
 	lines.push("");
 
@@ -159,10 +159,10 @@ export function renderDebugWidget(snapshot: DebugSnapshot, theme: Theme): string
 	lines.push(
 		`${theme.fg("accent", theme.bold("HYPOTHESIS"))} ${theme.fg("muted", `#${snapshot.hypothesisCount}`)}`,
 	);
-	if (snapshot.hypothesis.length === 0) {
+	if (snapshot.hypothesis === null) {
 		lines.push(`  ${theme.fg("dim", "No hypothesis yet — waiting for context.")}`);
 	} else {
-		for (const line of snapshot.hypothesis) lines.push(`  ${line}`);
+		for (const line of snapshot.hypothesis.split("\n")) lines.push(`  ${line}`);
 	}
 	lines.push("");
 

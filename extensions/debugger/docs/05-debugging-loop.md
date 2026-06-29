@@ -10,9 +10,10 @@ state machine + a skill + custom tools + event hooks — **not** procedural cont
 
 ## Architecture (mirrors `plan-mode`)
 
-- **`state.ts`** — debug session state: `{ active, mode, state, hypothesis, hypothesisCount,
+- **`state.ts`** — debug session state: `{ active, mode, state, bug, hypothesis, hypothesisCount,
   attempts, snippetIds, telemetryTarget }`. Persisted with `pi.appendEntry("debugger", state)`;
-  restored on `session_start`.
+  restored on `session_start`. (`bug` is currently written only to the ephemeral widget snapshot
+  by the `report_bug` tool; Part 5 makes it resume-safe here.)
 - **`skill/SKILL.md`** — loaded on demand; teaches the model the loop, the snippet format, the
   packet schema, and when to call which tool.
 - **`before_agent_start`** — inject a short, `display:false` context message telling the model
@@ -60,6 +61,7 @@ DEBUG SUMMARY  (ask: exit debug mode or continue)
 
 | Tool | Effect |
 |---|---|
+| `report_bug(summary)` | Records the bug summary in the instrumentation widget (the bug is known by the time a hypothesis forms). Implemented today as a thin write to the ephemeral widget snapshot; Part 5 wires it into persisted `state.bug`. |
 | `report_hypothesis(hypothesis, files[], functions[])` | Records hypothesis, sets `hypothesisCount`, transitions to `HYPOTHESIS & BUG VALIDATION`. |
 | `request_user_test(steps)` | Renders reproduction steps in the widget body + the "Bug Fixed / Continue to Debug" affordance; waits for the user's answer. |
 | `record_test_result(result)` | `fixed` → BUG FIXED/cleanup; `continue` → remove failed fix+snippets, back to HYPOTHESIS (or AWAITING CONTEXT if attempts ≥ max). |

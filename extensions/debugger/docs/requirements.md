@@ -149,7 +149,7 @@ Provides status of the current debugger.  Should include:
 
 #### **Bug Summary**
 
-This is where the description of the bug being investigated will reside.  It is a static display of what the bug is, and can span multiple lines.  It will be empty until the LLM has enough context to describe the bug.  
+This is where the description of the bug being investigated will reside.  It is a static display of what the bug is, and can span multiple lines.  It will be empty until the LLM has enough context to describe the bug.  The LLM records the bug (via a `report_bug` tool), and the user can correct or revise it at any time via `/debugger bug`.
 
 #### **Hypothesis Statement**
 

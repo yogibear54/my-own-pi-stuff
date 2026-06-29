@@ -20,6 +20,7 @@
  */
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { rmSync } from "node:fs";
+import { Type } from "typebox";
 
 import { startLogServer, type LogServerHandle, type TelemetryPacket } from "./server.ts";
 import { LogStreamOverlay } from "./logstream.ts";
@@ -54,7 +55,7 @@ export default function debuggerExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("debugger", {
-		description: "Start a debug session (/debugger, /debugger logs, /debugger stop)",
+		description: "Debug session (/debugger, /debugger logs, /debugger bug, /debugger stop)",
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim();
 			if (arg === "stop") {
@@ -65,9 +66,47 @@ export default function debuggerExtension(pi: ExtensionAPI): void {
 				openLogOverlay(ctx);
 				return;
 			}
+			if (arg === "bug" || arg.startsWith("bug ")) {
+				await editBug(ctx, arg === "bug" ? "" : arg.slice("bug ".length));
+				return;
+			}
 			// `remote` mode and its ngrok tunnel land in Part 2; for now any other
 			// invocation starts a local session.
 			await startDebug(ctx);
+		},
+	});
+
+	// report_bug — the LLM records the bug under investigation in the instrumentation.
+	// Always registered (pi exposes no unregister API); a no-session call returns an
+	// error result so the tool is inert outside a debug session. The debugging loop
+	// (Part 5) will own this state and make it resume-safe.
+	pi.registerTool({
+		name: "report_bug",
+		label: "Report Bug",
+		description:
+			"Record the bug under investigation in the debugger instrumentation widget. Call once you have enough context to state the bug clearly; call again to revise. Only effective during a /debugger session.",
+		promptSnippet: "report_bug(summary) — record/revise the bug summary shown in the debugger widget",
+		promptGuidelines: [
+			"During a /debugger session, once you have enough context to state the bug, call report_bug(summary) with a concise description; multi-line summaries are supported.",
+			"Revise the summary by calling report_bug again if your understanding changes.",
+		],
+		parameters: Type.Object({
+			summary: Type.String({
+				description: "Concise summary of the bug under investigation. May span multiple lines.",
+			}),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			if (!snapshot) {
+				return {
+					content: [{ type: "text", text: "No active debug session. Start one with /debugger." }],
+					details: undefined,
+				};
+			}
+			applyBug(ctx, params.summary);
+			return {
+				content: [{ type: "text", text: `Bug summary recorded:\n${params.summary}` }],
+				details: undefined,
+			};
 		},
 	});
 }
@@ -145,6 +184,33 @@ function stopDebug(ctx: ExtensionContext): void {
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	ctx.ui.setWidget(WIDGET_KEY, undefined);
 	ctx.ui.notify("Debug session stopped.", "info");
+}
+
+/** Assign the bug summary into the snapshot and repaint. A null/blank value clears it. */
+function applyBug(ctx: ExtensionContext, summary: string | null): void {
+	if (!snapshot) return;
+	const trimmed = summary === null ? "" : summary.trim();
+	snapshot.bug = trimmed === "" ? null : summary;
+	uiRef = ctx.ui;
+	paintUi(ctx.ui);
+}
+
+/**
+ * `/debugger bug [text]` — set the bug summary directly, or (bare) edit it via a
+ * prompt. `ui.input` has no prefill, so the current bug is shown as placeholder
+ * hint text. The override is single-line; multi-line summaries come via report_bug.
+ */
+async function editBug(ctx: ExtensionContext, text: string): Promise<void> {
+	if (!snapshot) {
+		ctx.ui.notify("No active debug session.", "info");
+		return;
+	}
+	const direct = text.trim();
+	const summary =
+		direct.length > 0 ? direct : await ctx.ui.input("Edit bug summary", snapshot.bug ?? "Describe the bug…");
+	if (summary === undefined) return; // user cancelled
+	applyBug(ctx, summary);
+	ctx.ui.notify(snapshot?.bug ? "Bug summary updated." : "Bug summary cleared.", "info");
 }
 
 /** Open the scrollable telemetry overlay. No-op-with-notify if no session. */

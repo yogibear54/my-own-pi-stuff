@@ -14,12 +14,15 @@ which matches the default above-editor widget region.
    inbound port info (and ngrok URL in remote mode). For local frontend JS/TS the user can
    `fetch()` the endpoint directly — surface that hint.
 2. **Bug summary** — a `BUG` label on its own line followed by one or more indented lines
-   summarizing the bug under investigation. Empty (placeholder) until the bug is described.
-   The summary may span multiple lines (`DebugSnapshot.bug: string[]`).
+   summarizing the bug under investigation. `null` (placeholder) until the bug is described.
+   The summary is a single string in `DebugSnapshot.bug: string | null`; newlines split it into
+   lines. Populated by the `report_bug` tool; the user can set/clear it via
+   `/debugger bug [text]` (bare opens an edit prompt).
 3. **Hypothesis statement** — static display of the current hypothesis under test + a hypothesis
-   counter (increments each time a fix fails and a new hypothesis is formed). The hypothesis may
-   span multiple lines (`DebugSnapshot.hypothesis: string[]`); the label + counter sit on the
-   header line, each hypothesis line indented below.
+   counter (increments each time a fix fails and a new hypothesis is formed). The hypothesis is a
+   single string in `DebugSnapshot.hypothesis: string | null`; newlines split it into lines, with
+   the label + counter on the header line and each line indented below. (Populated by the Part 5
+   `report_hypothesis` tool.)
 4. **Log stream** — pretty-printed recent packets; scrollable, can scroll back to review history.
    Only shown when injected snippets are active and emitting.
 5. **Body** — multi-purpose scrollable area: LLM questions, next-step prompts, and response
@@ -72,7 +75,9 @@ is therefore split into two surfaces, both now implemented:
   scroll overlay; `done()` closes it. See `examples/extensions/overlay-test.ts` / `snake.ts`.
 - `ctx.ui.setStatus("debugger", ...)` for a footer chip.
 - `/debugger` starts the log server (`server.ts`) and opens the overlay; `/debugger logs` reopens
-  it; `/debugger stop` closes server + overlay + widget.
+  it; `/debugger stop` closes server + overlay + widget. `/debugger bug [text]` sets/edits the
+  bug summary shown in the widget (bare opens an edit prompt); the LLM-side path is the
+  `report_bug` tool.
 - The server's `onPacket(packet)` callback pushes to the session packet buffer, repaints the
   widget tail, and calls `overlay.refresh()` when open. UI context is captured on `session_start`
   (the safe place for out-of-command repaints).
@@ -83,7 +88,7 @@ is therefore split into two surfaces, both now implemented:
 2. Header shows current state, port (8866 or ngrok URL), and a `LIVE LOGGING` indicator that
    appears while packets are arriving.
 3. Bug summary region shows the current bug description; placeholder until the bug is described,
-   and supports multi-line summaries.
+   and supports multi-line summaries. Populated by `report_bug`; user-editable via `/debugger bug`.
 4. Hypothesis region shows the current hypothesis + counter; counter increments on failed fixes.
    The hypothesis may span multiple lines.
 5. Log stream shows pretty-printed packets (compact one-liner tail in-widget; expanded block
@@ -102,3 +107,6 @@ is therefore split into two surfaces, both now implemented:
   viewer. No line-wrapping in the overlay yet (long `message`/`stack_trace` may clip).
 - The overlay captures its theme at open time; a live `/theme` switch mid-overlay won't restyle
   it (reopen to refresh).
+- The bug and hypothesis summaries are **ephemeral** — they live only in the live-session widget
+  snapshot and are lost on `/resume`/reload. Persistence (resume-safe state) arrives with the
+  Part 5 state machine (`pi.appendEntry`).
