@@ -1,24 +1,48 @@
 {
   "id": "ca0bdabd",
-  "title": "Slash commands /debugger, /debugger remote, /debugger stop (Part 2)",
+  "title": "Slash commands /debugger, /debugger stop (Part 2) — DONE",
   "tags": [
     "debugger",
     "part-2",
     "commands"
   ],
-  "status": "open",
+  "status": "done",
   "created_at": "2026-06-24T00:53:43.432Z"
 }
 
-Implement the three lifecycle commands. **Reference: [docs/02-slash-commands.md](docs/02-slash-commands.md).**
+**Status: DONE — closing.** Part-2-resident work (local + stop core) is implemented
+and verified in `index.ts`; bonus `/debugger logs`, `/debugger bug`, and the
+`report_bug` tool shipped alongside. `/debugger remote` is **deferred**
+(low priority → separate todo). Cross-part wiring on `stop()` (snippet cleanup,
+state-machine reset+persist) is owned by Parts 4/5 — see Deferred.
 
-> **Command name is `/debugger`, not `/debug`.** pi reserves a built-in `/debug` command (screen-capture debug log); the TUI intercepts it (`if (text === "/debug")`) before extension commands run, so an extension registering `debug` can never receive it. Confirmed in pi 0.80.2. The extension registers `debugger` and parses trailing args in one handler.
+**Reference: [docs/02-slash-commands.md](docs/02-slash-commands.md).**
 
-Scope:
-- `/debugger` (local): start server on 8866, telemetry target `http://localhost:8866`, enter debug state, show widget, activate debug tools/skill, prompt for bug context.
-- `/debugger remote`: start `ngrok http 8866`, scrape public URL (graceful error if `ngrok` missing), instructional mode (no remote edits — copy-paste patches), surface URL in widget.
-- `/debugger stop`: run snippet cleanup (Part 4), stop ngrok, close server (Part 1), clear widget + footer status, reset + persist state, keep the log file. Idempotent.
+> **Command name is `/debugger`, not `/debug`.** pi reserves a built-in `/debug`
+> command (screen-capture debug log); the TUI intercepts it before extension
+> commands run. Confirmed in pi 0.80.2. The extension registers `debugger` and
+> parses trailing args in one handler.
 
-Verified: pi routes trailing words after a slash command as the `args` string, so `/debugger remote` and `/debugger stop` both reach the single `debugger` handler.
+## Shipped (implemented in index.ts)
+- `/debugger` (local): start server on 8866, telemetry target
+  `http://localhost:8866`, widget + red "debug" footer status, auto-open the live
+  log overlay, notify. ✅ (AC1)
+- `/debugger stop`: close server, **delete the per-session JSONL log file**
+  (`rmSync`), clear widget + footer status, close overlay, reset snapshot.
+  Idempotent (no-session → info notify). ✅ (AC4-partial, AC5, AC6)
+- `/debugger logs`: open the scrollable telemetry overlay. ✅ (bonus)
+- `/debugger bug [text]` + `report_bug` tool: set/edit/clear the bug summary; the
+  same field is updated by both. ✅ (AC7, bonus)
 
-Acceptance criteria: see doc §Acceptance Criteria.
+## Deferred
+- **`/debugger remote`** (ngrok, public-URL scrape, instructional mode, graceful
+  missing-ngrok error) — reprioritized below Parts 4–5. Tracked in its own
+  low-priority todo. (AC2, AC3 not met.)
+- **Snippet cleanup on `stop()`** — owned by Part 4. (AC4 remainder.)
+- **State-machine reset + `pi.appendEntry` persist on `stop()`** — owned by Part 5.
+- "Prompt for bug context" on local start: passive widget hint + notify is
+  sufficient (no active `ui.input` prompt). Decision recorded.
+
+## Resolved (contradiction fixed)
+- **Log file on stop: DELETE, not keep.** Original body said "keep the log file";
+  code + AC6 + docs/02 §stop step 4 all delete. Corrected here.
