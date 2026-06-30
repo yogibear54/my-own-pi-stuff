@@ -1,8 +1,8 @@
 /**
  * System Manager Extension
  *
- * Provides a /system command to enable/disable skills, extensions, utils,
- * and root config files via symbolic links between agent-git/ and agent/.
+ * Provides a /system command to enable/disable skills, extensions, prompts,
+ * utils, and root config files via symbolic links between agent-git/ and agent/.
  *
  * Source: ~/.pi/agent-git/{category}/item
  * Target: ~/.pi/agent/{category}/item  (symlink)
@@ -50,6 +50,7 @@ interface Category {
 	sourceDir: string;
 	targetDir: string;
 	type: "file" | "dir" | "mixed";
+	extension?: string; // when type === "file", only include files with this suffix
 }
 
 function buildCategories(sourceDir: string): Category[] {
@@ -71,6 +72,13 @@ function buildCategories(sourceDir: string): Category[] {
 			sourceDir: join(sourceDir, "skills"),
 			targetDir: join(AGENT, "skills"),
 			type: "dir",
+		},
+		{
+			name: "Prompts",
+			sourceDir: join(sourceDir, "prompts"),
+			targetDir: join(AGENT, "prompts"),
+			type: "file",
+			extension: ".md",
 		},
 		{
 			name: "Utils",
@@ -112,7 +120,9 @@ function getItems(category: Category): string[] {
 			(d) =>
 				d.isFile() &&
 				!d.name.startsWith(".") &&
-				!ROOT_EXCLUDE.has(d.name),
+				!ROOT_EXCLUDE.has(d.name) &&
+				(!category.extension ||
+					d.name.endsWith(category.extension)),
 		)
 		.map((d) => d.name)
 		.sort();
@@ -163,7 +173,7 @@ function toggleLink(category: Category, item: string): boolean {
 
 export default function systemManager(pi: ExtensionAPI) {
 	pi.registerCommand("system", {
-		description: "Manage skills, extensions, utils, and root config symlinks",
+		description: "Manage skills, extensions, prompts, utils, and root config symlinks",
 		handler: async (_args, ctx) => {
 			// Build the items for all categories
 			interface ItemInfo {
