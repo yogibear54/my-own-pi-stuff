@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Pi Browser Picker",
+  "version": "0.1.0",
+  "description": "Hover/click elements in the browser and send them to a Pi session.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Toggle Pi Picker"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
