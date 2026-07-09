@@ -87,10 +87,14 @@ export default function (pi: ExtensionAPI) {
       "```html\n" + outerHTML + "\n```";
 
     // If idle, trigger a turn now. If Pi is busy, queue as a follow-up.
-    if (sessionCtx?.isIdle()) {
-      void pi.sendUserMessage(text);
-    } else {
-      void pi.sendUserMessage(text, { deliverAs: "followUp" });
-    }
+    // if (sessionCtx?.isIdle()) {
+    //   void pi.sendUserMessage(text);
+    // } else {
+    //   void pi.sendUserMessage(text, { deliverAs: "followUp" });
+    // }
+
+    console.log(text);
+    // Prefill the input editor so the user can review before sending.
+    sessionCtx?.ui.pasteToEditor(text + "\n");
   }
 }
