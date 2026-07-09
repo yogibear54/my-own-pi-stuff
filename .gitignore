@@ -6,3 +6,7 @@ node_modules/
 index.db
 index.db-shm
 index.db-wal
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
