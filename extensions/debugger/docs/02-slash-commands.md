@@ -44,7 +44,8 @@ Three commands drive the debug lifecycle and select the telemetry/execution topo
 ### `/debugger stop`
 
 1. Run snippet cleanup: remove every `/* AI_DEBUG_SNIPPET_START... */ ... END */` block added
-   during the session (Part 4), keeping any accepted fix.
+   during the session (Part 4 ✅ — wired via `cleanup_all_snippets` in `tools.ts`), keeping any
+   accepted fix.
 2. Stop ngrok tunnel (if remote).
 3. Close the log server (Part 1).
 4. Delete the per-session JSONL log file created for this session.
@@ -98,7 +99,7 @@ User override for the bug summary shown in the instrumentation widget (the LLM-s
 
 ## Dependencies / Open Items
 
-- Depends on Part 1 (server), Part 3 (widget), Part 4 (cleanup), Part 5 (state machine).
+- Depends on Part 1 (server) ✅, Part 3 (widget) ✅, Part 4 (snippet cleanup) ✅ wired, Part 5 (state machine).
 - **Command name is `/debugger`, not `/debug`.** Pi reserves a built-in `/debug`
   command (writes a screen-capture debug log). The TUI intercepts it in its command
   router (`if (text === "/debug")`) *before* extension commands are consulted, so an

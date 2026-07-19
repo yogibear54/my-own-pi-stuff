@@ -1,6 +1,8 @@
 # Part 4 — Log Snippet Injection & Cleanup
 
 > Part of the [Pi AI Debugger](./ARCHITECTURE.md). Source requirements: `requirements.md` → "Log Snippet Code Injection" and "Log Snippet Code Cleanup".
+>
+> **Status: Implemented** in `snippets.ts` (pure helpers) + `tools.ts` (tool factory + registry), wired into `index.ts`. Id policy = **hybrid** (model may pass an `id`; tool auto-assigns if omitted/collides). Registry is **ephemeral** for now — Part 5 makes it resume-safe via `appendEntry`.
 
 ## Purpose
 
@@ -17,24 +19,38 @@ snippets safely.
 /* AI_DEBUG_SNIPPET_END */
 ```
 
-- `ID` — numeric, unique within a session; lets the agent target a specific snippet among many.
+- `ID` — numeric, unique within a session. **Hybrid policy:** the model may pass an `id`; if omitted or already used, `inject_snippet` auto-assigns the next free session id and returns it. Lets the agent target a specific snippet among many.
 - `NAME` — short human label for the snippet's purpose.
 - Block-comment delimiters work for C-family languages (JS/TS/Java/C/C++/Go/Rust/CSS/etc.).
 
 ### Per-language comments
 
-Some languages lack block comments. Strategy:
+`commentStyleFor(language)` dispatches one of three styles (unknown → block default):
 
-- Default: block-comment form above.
-- For line-comment-only languages (Python `#`, Ruby `#`, Shell `#`, etc.), emit paired
-  single-line markers on their own lines:
+- **block** (default) — C-family block comments: JS/TS/JSX/TSX/Java/C/C++/C#/Go/Rust/Swift/Kotlin/CSS/SCSS/**PHP** (+ `phtml`), …:
+    ```
+    /* AI_DEBUG_SNIPPET_START:ID=1 NAME="probe" */
+    <POST code>
+    /* AI_DEBUG_SNIPPET_END */
+    ```
+- **hash** — `#` line comments: Python, Ruby, Shell/Bash/Zsh, YAML, TOML, Perl, R, Dockerfile, …:
     ```
     # AI_DEBUG_SNIPPET_START:ID=2 NAME="check token len"
     <POST code>
     # AI_DEBUG_SNIPPET_END
     ```
-- The cleanup tool matches **both** forms, so the model may pick whichever is syntactically
-  valid for the file.
+- **liquid** — Shopify Liquid `{% comment %}` tags (`liquid`, `shopify_liquid`):
+    ```
+    {% comment %} AI_DEBUG_SNIPPET_START:ID=3 NAME="marker" {% endcomment %}
+    <POST code or host-app hook>
+    {% comment %} AI_DEBUG_SNIPPET_END {% endcomment %}
+    ```
+    Liquid is a server-rendered template language and **cannot POST telemetry itself** — any
+    telemetry must be emitted by the surrounding host app (Ruby/Rails, Node, …). The delimiters
+    keep the template syntactically valid and act as markers.
+
+`findSnippets` matches the style-agnostic `AI_DEBUG_SNIPPET_START…END` core, so cleanup works
+regardless of which style was used.
 
 ## What the snippet body does
 
@@ -48,12 +64,14 @@ ngrok URL remote). `source.line` should be the line where the snippet sits.
 
 ### `inject_snippet`
 
-- Params: `path` (file), `line` (insert location), `id`, `name`, `language`, `code` (the body).
+- Params: `path`, `line` (1-based insert location), `name`, `language`, `code` (the body),
+  optional `id`.
 - Wraps `code` in the correct delimiters for `language` and inserts at `line`.
-- **Must** run its read-modify-write inside `withFileMutationQueue(absPath, ...)` to avoid races
-  with built-in `edit`/`write` running in parallel.
-- Normalize a leading `@` on `path` (models sometimes prefix paths with `@`).
-- Returns the inserted block text + resulting line number.
+- Read-modify-write runs inside `withFileMutationQueue(absPath, ...)` to avoid races with the
+  built-in `edit`/`write` (they share the same per-file queue).
+- Normalizes a leading `@` on `path`.
+- **Hybrid id:** uses a passed `id` if free, else auto-assigns the next session id. **Returns the
+  assigned id + resulting line** — the model echoes this back as `source.line` in its packets.
 
 ### `remove_snippet`
 
@@ -69,8 +87,9 @@ ngrok URL remote). `source.line` should be the line where the snippet sits.
 
 ### `cleanup_all_snippets`
 
-- No params. Removes every tracked snippet in the session (called by `/debugger stop` and on fix
-  acceptance). Keeps the actual fix code (snippets ≠ fix).
+- No params. Removes every tracked snippet in the session. Called by `/debugger stop` (wired)
+  and on fix acceptance (Part 5's `mark_bug_fixed`). Keeps the actual fix code (snippets ≠ fix).
+  Best-effort: returns a per-file error list rather than throwing.
 
 ## Prompt guidance
 
@@ -83,9 +102,10 @@ Register `promptSnippet` + `promptGuidelines` on these tools so the model:
 
 ## Tracking
 
-Maintain a session map of `{ id → { file, name, line } }` so `/debugger stop` and "remove on failed
-fix" are deterministic even if the model forgets a file. Persist via `appendEntry` (Part 5) so a
-`/resume` can still clean up.
+An in-memory session registry `{ id → { file, name, line } }` (in `tools.ts`) makes
+`/debugger stop` and "remove on failed fix" deterministic even if the model forgets a file.
+**Persistence is deferred to Part 5** (`appendEntry`) so a `/resume` can still clean up; today the
+registry is ephemeral and reset on start/stop.
 
 ## Acceptance Criteria
 
@@ -101,7 +121,9 @@ fix" are deterministic even if the model forgets a file. Persist via `appendEntr
 
 ## Dependencies / Open Items
 
-- Depends on Part 1 (server/schema) and Part 5 (state/session tracking).
-- Decide how the model learns the exact `line` to report in `source.line` — simplest: the tool
-  computes it from the insertion location and tells the model.
-- Remote-mode patch format (unified diff vs fenced block) finalized here or in Part 2.
+- Depends on Part 1 (server/schema) ✅ and Part 5 (state/session tracking) for resume-safe persistence.
+- ✅ `source.line`: `inject_snippet` computes and returns the resulting line; the model echoes it.
+- ✅ `id` policy: hybrid (model may pass; tool auto-assigns if omitted/collides).
+- Remote-mode patch format (unified diff vs fenced block) finalized when `/debugger remote` is built.
+- AC4 concurrency is verified via two parallel `withFileMutationQueue` mutations; full parity with
+  the built-in `edit` holds because both share the same per-file queue.

@@ -20,11 +20,11 @@
  */
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { rmSync } from "node:fs";
-import { Type } from "typebox";
 
 import { startLogServer, type LogServerHandle, type TelemetryPacket } from "./server.ts";
 import { LogStreamOverlay } from "./logstream.ts";
 import { formatPacketCompact, initialSnapshot, renderDebugWidget, TAIL_LIMIT, type DebugSnapshot } from "./widget.ts";
+import { cleanupAllSnippets, registerReportBugTool, registerSnippetTools, resetSnippets } from "./tools.ts";
 
 const WIDGET_KEY = "debugger";
 const STATUS_KEY = "debug";
@@ -59,7 +59,7 @@ export default function debuggerExtension(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim();
 			if (arg === "stop") {
-				stopDebug(ctx);
+				await stopDebug(ctx);
 				return;
 			}
 			if (arg === "logs") {
@@ -76,39 +76,12 @@ export default function debuggerExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	// report_bug — the LLM records the bug under investigation in the instrumentation.
-	// Always registered (pi exposes no unregister API); a no-session call returns an
-	// error result so the tool is inert outside a debug session. The debugging loop
-	// (Part 5) will own this state and make it resume-safe.
-	pi.registerTool({
-		name: "report_bug",
-		label: "Report Bug",
-		description:
-			"Record the bug under investigation in the debugger instrumentation widget. Call once you have enough context to state the bug clearly; call again to revise. Only effective during a /debugger session.",
-		promptSnippet: "report_bug(summary) — record/revise the bug summary shown in the debugger widget",
-		promptGuidelines: [
-			"During a /debugger session, once you have enough context to state the bug, call report_bug(summary) with a concise description; multi-line summaries are supported.",
-			"Revise the summary by calling report_bug again if your understanding changes.",
-		],
-		parameters: Type.Object({
-			summary: Type.String({
-				description: "Concise summary of the bug under investigation. May span multiple lines.",
-			}),
-		}),
-		async execute(_id, params, _signal, _onUpdate, ctx) {
-			if (!snapshot) {
-				return {
-					content: [{ type: "text", text: "No active debug session. Start one with /debugger." }],
-					details: undefined,
-				};
-			}
-			applyBug(ctx, params.summary);
-			return {
-				content: [{ type: "text", text: `Bug summary recorded:\n${params.summary}` }],
-				details: undefined,
-			};
-		},
-	});
+	// report_bug (LLM-side producer for the bug summary) + snippet tools live in
+	// tools.ts; applyBug is owned here (it also serves the /debugger bug command).
+	registerReportBugTool(pi, () => snapshot, applyBug);
+
+	// Snippet tools (Part 4): inject / remove / list / cleanup telemetry snippets.
+	registerSnippetTools(pi, () => snapshot);
 }
 
 /** Repaint the widget from the current snapshot. No-op if no session. */
@@ -137,6 +110,7 @@ async function startDebug(ctx: ExtensionContext): Promise<void> {
 		serverHandle = null;
 	}
 	packets.length = 0;
+	resetSnippets();
 
 	snapshot = initialSnapshot();
 
@@ -163,11 +137,14 @@ async function startDebug(ctx: ExtensionContext): Promise<void> {
 	openLogOverlay(ctx);
 }
 
-function stopDebug(ctx: ExtensionContext): void {
+async function stopDebug(ctx: ExtensionContext): Promise<void> {
 	if (!snapshot) {
 		ctx.ui.notify("No active debug session.", "info");
 		return;
 	}
+	// Remove injected telemetry snippets (best-effort); fixes are kept.
+	await cleanupAllSnippets();
+	resetSnippets();
 	if (serverHandle) {
 		const logFile = serverHandle.logFile;
 		serverHandle.close();
@@ -189,8 +166,8 @@ function stopDebug(ctx: ExtensionContext): void {
 /** Assign the bug summary into the snapshot and repaint. A null/blank value clears it. */
 function applyBug(ctx: ExtensionContext, summary: string | null): void {
 	if (!snapshot) return;
-	const trimmed = summary === null ? "" : summary.trim();
-	snapshot.bug = trimmed === "" ? null : summary;
+	const s = summary == null ? "" : String(summary);
+	snapshot.bug = s.trim() === "" ? null : s;
 	uiRef = ctx.ui;
 	paintUi(ctx.ui);
 }
