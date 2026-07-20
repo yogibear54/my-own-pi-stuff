@@ -1,6 +1,7 @@
 /**
- * Tool harness for Part 4 — drives the real registered snippet tools against
- * temp files, a live debug session, and the running log server.
+ * Tool harness for the debugger — drives the real registered tools (snippet,
+ * report_bug, and transition tools) against temp files, a live session, and the
+ * running log server. Inspects state via state.ts directly.
  *
  * Run: `node snippets.tools.test.mjs`
  *
@@ -28,26 +29,39 @@ const jiti = createJiti(import.meta.url, {
 
 let failures = 0;
 function ok(cond, msg) { if (cond) console.log("  ok  -", msg); else { failures++; console.log("  FAIL-", msg); } }
-function eq(actual, expected, msg) { ok(actual === expected, `${msg} (expected ${JSON.stringify(expected).slice(0,80)}, got ${JSON.stringify(actual).slice(0,80)})`); }
+function eq(actual, expected, msg) { ok(actual === expected, `${msg} (expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)})`); }
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
-// --- Load the extension and capture the registered tools + command handler ---
+// --- Load the extension, capture tools + command handler, and state for inspection ---
 const tools = {};
 let cmdHandler = null;
 const mod = await jiti.import(join(EXT, "index.ts"));
+const stateMod = await jiti.import(join(EXT, "state.ts"));
 mod.default({
 	on: () => {},
 	registerCommand: (_n, def) => { cmdHandler = def.handler; },
 	registerTool: (t) => { tools[t.name] = t; },
+	appendEntry: () => {}, // state persistence stub
 });
 const inject = tools.inject_snippet, remove = tools.remove_snippet, list = tools.list_snippets, cleanup = tools.cleanup_all_snippets;
-ok(inject && remove && list && cleanup, "factory registers all 4 snippet tools (+ report_bug)");
-const rb = tools.report_bug;
-ok(rb, "report_bug tool registered (moved to tools.ts)");
+const rb = tools.report_bug, rh = tools.report_hypothesis, rut = tools.request_user_test, ds = tools.debug_summary;
+ok(inject && remove && list && cleanup, "snippet tools registered");
+ok(rb && rh && rut && ds, "report_bug + transition tools registered");
 
-// Fake theme (renderDebugWidget only needs fg/bold) + minimal ui.
+// Fake theme (renderDebugWidget only needs fg/bold) + minimal ui (select is controllable).
 const theme = { fg: (_c, s) => s, bold: (s) => s };
-const mkCtx = (cwd) => ({ cwd, ui: { theme, setWidget: () => {}, setStatus: () => {}, notify: () => {}, custom: () => {} } });
+let selectChoice = "Bug Fixed";
+const mkCtx = (cwd) => ({
+	cwd,
+	ui: {
+		theme,
+		setWidget: () => {},
+		setStatus: () => {},
+		notify: () => {},
+		custom: () => {},
+		select: async (_prompt, _options) => selectChoice,
+	},
+});
 
 const cwd = mkdtempSync(join(tmpdir(), "dbg-tools-"));
 const ctx = mkCtx(cwd);
@@ -55,94 +69,108 @@ const file = (n) => join(cwd, n);
 
 console.log("\n[no-session gate — all tools inert]");
 {
-	const r = await inject.execute("c", { path: "x.js", line: 1, name: "n", language: "js", code: "c" }, undefined, undefined, ctx);
-	ok(strip(r.content[0].text).includes("No active debug session"), "inject inert without session");
-	const r2 = await cleanup.execute("c", {}, undefined, undefined, ctx);
-	ok(strip(r2.content[0].text).includes("No active debug session"), "cleanup inert without session");
-	const rb0 = await rb.execute("c", { summary: "x" }, undefined, undefined, ctx);
-	ok(strip(rb0.content[0].text).includes("No active debug session"), "report_bug inert without session");
+	ok(strip((await inject.execute("c", { path: "x.js", line: 1, name: "n", language: "js", code: "c" }, undefined, undefined, ctx)).content[0].text).includes("No active debug session"), "inject inert");
+	ok(strip((await cleanup.execute("c", {}, undefined, undefined, ctx)).content[0].text).includes("No active debug session"), "cleanup inert");
+	ok(strip((await rb.execute("c", { summary: "x" }, undefined, undefined, ctx)).content[0].text).includes("No active debug session"), "report_bug inert");
+	ok(strip((await rh.execute("c", { hypothesis: "x" }, undefined, undefined, ctx)).content[0].text).includes("No active debug session"), "report_hypothesis inert");
 }
 
 console.log("\n[start session]");
-await cmdHandler("", ctx); // "/debugger" → startDebug (binds :8866)
-ok(true, "session started");
+await cmdHandler("", ctx); // "/debugger" → startDebug (binds :8866, initializes state)
+eq(stateMod.getState().state, "AWAITING CONTEXT", "initial state = AWAITING CONTEXT");
+eq(stateMod.getState().active, true, "state.active = true");
 
-console.log("\n[report_bug — moved tool + empty-input defect fix]");
+console.log("\n[report_bug — persisted via state]");
 {
 	const r1 = await rb.execute("c", { summary: "Login fails for empty email" }, undefined, undefined, ctx);
 	ok(strip(r1.content[0].text).includes("Bug summary recorded"), "valid summary → recorded");
+	eq(stateMod.getState().bug, "Login fails for empty email", "bug persisted in state");
 	const r2 = await rb.execute("c", { summary: "" }, undefined, undefined, ctx);
-	ok(strip(r2.content[0].text).includes("cleared"), "empty summary → cleared (no throw)");
-	const r3 = await rb.execute("c", { summary: "multi\nline\nsummary" }, undefined, undefined, ctx);
-	ok(strip(r3.content[0].text).includes("Bug summary recorded"), "multi-line summary → recorded");
+	ok(strip(r2.content[0].text).includes("cleared"), "empty summary → cleared");
+	eq(stateMod.getState().bug, null, "bug cleared in state");
 }
+
+console.log("\n[transition tools — state machine]");
+{
+	// report_hypothesis → HYPOTHESIS & BUG VALIDATION, count=1
+	let r = await rh.execute("c", { hypothesis: "token check misses null", files: ["auth.ts"], functions: ["validate"] }, undefined, undefined, ctx);
+	ok(strip(r.content[0].text).includes("Hypothesis #1"), "report_hypothesis → #1");
+	eq(stateMod.getState().state, "HYPOTHESIS & BUG VALIDATION", "→ HYPOTHESIS & BUG VALIDATION");
+	eq(stateMod.getState().hypothesisCount, 1, "hypothesisCount = 1");
+	eq(stateMod.getState().attempts, 0, "attempts reset to 0");
+
+	// Continue path: 3 failures (MAX) → AWAITING CONTEXT, hypothesis cleared
+	selectChoice = "Continue to Debug";
+	await rut.execute("c", { steps: ["repro"] }, undefined, undefined, ctx);
+	eq(stateMod.getState().attempts, 1, "continue #1 → attempts=1");
+	eq(stateMod.getState().state, "HYPOTHESIS & BUG VALIDATION", "continue #1 still HYPOTHESIS");
+	await rut.execute("c", { steps: ["repro"] }, undefined, undefined, ctx);
+	eq(stateMod.getState().attempts, 2, "continue #2 → attempts=2");
+	await rut.execute("c", { steps: ["repro"] }, undefined, undefined, ctx);
+	eq(stateMod.getState().state, "AWAITING CONTEXT", "continue #3 at MAX → AWAITING CONTEXT");
+	eq(stateMod.getState().hypothesis, null, "hypothesis cleared at MAX");
+
+	// New hypothesis + fix + summary
+	await rh.execute("c", { hypothesis: "second idea" }, undefined, undefined, ctx);
+	eq(stateMod.getState().hypothesisCount, 2, "second hypothesis → #2");
+	writeFileSync(file("app.js"), "function a(){\n  return 1\n}\n");
+	await inject.execute("c", { path: "app.js", line: 1, name: "t", language: "js", code: "probe();" }, undefined, undefined, ctx);
+	ok(Object.keys(stateMod.getSnippetMap()).length > 0, "snippet tracked before fix test");
+	selectChoice = "Bug Fixed";
+	r = await rut.execute("c", { steps: ["repro"] }, undefined, undefined, ctx);
+	ok(strip(r.content[0].text).includes("BUG FIXED"), "Bug Fixed → BUG FIXED");
+	eq(stateMod.getState().state, "BUG FIXED", "state → BUG FIXED");
+	eq(Object.keys(stateMod.getSnippetMap()).length, 0, "snippets cleaned on fix");
+
+	selectChoice = "Exit Debug mode";
+	r = await ds.execute("c", { summary: "Fixed: added null check for email." }, undefined, undefined, ctx);
+	ok(strip(r.content[0].text).includes("stopped"), "debug_summary Exit → stopped");
+	eq(stateMod.getState(), null, "state cleared after stop");
+}
+
+// Restart a fresh session for the snippet-behavior tests below.
+await cmdHandler("", ctx);
 
 console.log("\n[hybrid id: explicit / auto / collision]");
 {
 	writeFileSync(file("app.js"), "function a(){\n  return 1\n}\n");
-	const r1 = await inject.execute("c1", { path: "app.js", line: 2, name: "probe", language: "javascript", code: "fetch('/log',{method:'POST',body:'{}'})", id: 5 }, undefined, undefined, ctx);
-	ok(strip(r1.content[0].text).includes("ID=5"), "explicit id honored");
-	ok(strip(r1.content[0].text).includes("block"), "block style reported");
-
-	const r2 = await inject.execute("c2", { path: "app.js", line: 1, name: "top", language: "python", code: "pass", id: 1 }, undefined, undefined, ctx);
-	ok(strip(r2.content[0].text).includes("ID=1"), "second explicit id (1) honored");
-
-	// Collision: id 5 is used → auto-assign next free (2).
-	const r3 = await inject.execute("c3", { path: "app.js", line: 1, name: "col", language: "js", code: "x", id: 5 }, undefined, undefined, ctx);
-	ok(strip(r3.content[0].text).includes("ID=2"), "collision → auto-assigned next free id (2)");
-
-	// Omitted id → next free (3).
-	const r4 = await inject.execute("c4", { path: "app.js", line: 1, name: "auto", language: "js", code: "y" }, undefined, undefined, ctx);
-	ok(strip(r4.content[0].text).includes("ID=3"), "omitted id → auto-assigned (3)");
+	ok(strip((await inject.execute("c1", { path: "app.js", line: 2, name: "probe", language: "javascript", code: "fetch()", id: 5 }, undefined, undefined, ctx)).content[0].text).includes("ID=5"), "explicit id honored");
+	ok(strip((await inject.execute("c2", { path: "app.js", line: 1, name: "top", language: "python", code: "pass", id: 1 }, undefined, undefined, ctx)).content[0].text).includes("ID=1"), "second explicit id (1) honored");
+	ok(strip((await inject.execute("c3", { path: "app.js", line: 1, name: "col", language: "js", code: "x", id: 5 }, undefined, undefined, ctx)).content[0].text).includes("ID=2"), "collision → auto-assigned next free id (2)");
+	ok(strip((await inject.execute("c4", { path: "app.js", line: 1, name: "auto", language: "js", code: "y" }, undefined, undefined, ctx)).content[0].text).includes("ID=3"), "omitted id → auto-assigned (3)");
 }
 
 console.log("\n[list + remove by id]");
 {
-	const r = await list.execute("c", {}, undefined, undefined, ctx);
-	const arr = JSON.parse(r.content[0].text);
-	eq(arr.length, 4, "list shows 4 tracked snippets");
-
-	const rr = await remove.execute("c", { path: "app.js", id: 5 }, undefined, undefined, ctx);
-	ok(strip(rr.content[0].text).includes("Removed 1"), "remove by id removes 1");
-
-	const after = JSON.parse((await list.execute("c", {}, undefined, undefined, ctx)).content[0].text);
-	eq(after.length, 3, "list shows 3 after remove");
+	eq(JSON.parse((await list.execute("c", {}, undefined, undefined, ctx)).content[0].text).length, 4, "list shows 4 tracked");
+	ok(strip((await remove.execute("c", { path: "app.js", id: 5 }, undefined, undefined, ctx)).content[0].text).includes("Removed 1"), "remove by id removes 1");
+	eq(JSON.parse((await list.execute("c", {}, undefined, undefined, ctx)).content[0].text).length, 3, "list shows 3 after remove");
 }
 
 console.log("\n[style dispatch: php → block, liquid → tag form]");
 {
 	writeFileSync(file("srv.php"), "<?php\nfunction f(){\n  return 1;\n}\n");
-	const rp = await inject.execute("c", { path: "srv.php", line: 2, name: "p", language: "php", code: "curl_post();" }, undefined, undefined, ctx);
-	ok(strip(rp.content[0].text).includes("block"), "php → block style");
-	const php = readFileSync(file("srv.php"), "utf8");
-	ok(php.includes("/* AI_DEBUG_SNIPPET_START"), "php file got block delimiters");
-
+	ok(strip((await inject.execute("c", { path: "srv.php", line: 2, name: "p", language: "php", code: "curl_post();" }, undefined, undefined, ctx)).content[0].text).includes("block"), "php → block style");
+	ok(readFileSync(file("srv.php"), "utf8").includes("/* AI_DEBUG_SNIPPET_START"), "php file got block delimiters");
 	writeFileSync(file("theme.liquid"), "<div>\n  {{ product.title }}\n</div>\n");
-	const rl = await inject.execute("c", { path: "theme.liquid", line: 2, name: "m", language: "liquid", code: "<!-- host app -->" }, undefined, undefined, ctx);
-	ok(strip(rl.content[0].text).includes("liquid"), "liquid → liquid style");
-	const liq = readFileSync(file("theme.liquid"), "utf8");
-	ok(liq.includes("{% comment %} AI_DEBUG_SNIPPET_START"), "liquid file got tag delimiters");
+	ok(strip((await inject.execute("c", { path: "theme.liquid", line: 2, name: "m", language: "liquid", code: "<!-- host app -->" }, undefined, undefined, ctx)).content[0].text).includes("liquid"), "liquid → liquid style");
+	ok(readFileSync(file("theme.liquid"), "utf8").includes("{% comment %} AI_DEBUG_SNIPPET_START"), "liquid file got tag delimiters");
 }
 
-console.log("\n[byte-identical round-trip: inject → cleanup == original]");
+console.log("\n[byte-identical round-trip + AC3 fix-kept]");
 {
 	writeFileSync(file("rt.js"), "function a(){\n  return 1\n}\n");
 	const original = readFileSync(file("rt.js"), "utf8");
 	await inject.execute("c", { path: "rt.js", line: 2, name: "t", language: "js", code: "probe();" }, undefined, undefined, ctx);
-	await cleanup.execute("c", {}, undefined, undefined, ctx); // clears ALL tracked — includes this one
-	const after = readFileSync(file("rt.js"), "utf8");
-	eq(after, original, "single-snippet round-trip is byte-identical");
-}
-
-console.log("\n[AC3: cleanup keeps an accepted fix, removes only snippets]");
-{
-	const fixed = "function a(){\n  return 2\n}\n"; // the "fix": 1 → 2
+	await cleanup.execute("c", {}, undefined, undefined, ctx);
+	eq(readFileSync(file("rt.js"), "utf8"), original, "single-snippet round-trip byte-identical");
+	const fixed = "function a(){\n  return 2\n}\n";
 	writeFileSync(file("fix.js"), fixed);
 	await inject.execute("c", { path: "fix.js", line: 2, name: "tel", language: "js", code: "probe();" }, undefined, undefined, ctx);
 	await cleanup.execute("c", {}, undefined, undefined, ctx);
 	const after = readFileSync(file("fix.js"), "utf8");
-	eq(after, fixed, "cleanup removed the snippet but kept the fix");
-	ok(!after.includes("AI_DEBUG_SNIPPET"), "no snippet delimiters remain");
+	eq(after, fixed, "cleanup kept the fix, removed the snippet");
+	ok(!after.includes("AI_DEBUG_SNIPPET"), "no delimiters remain");
 }
 
 console.log("\n[concurrency: two parallel injects on one file don't corrupt]");
@@ -153,36 +181,23 @@ console.log("\n[concurrency: two parallel injects on one file don't corrupt]");
 		inject.execute("c", { path: "conc.js", line: 1, name: "two", language: "js", code: "two();", id: 71 }, undefined, undefined, ctx),
 	]);
 	ok(strip(r1.content[0].text).includes("Injected") && strip(r2.content[0].text).includes("Injected"), "both parallel injects succeeded");
-	const content = readFileSync(file("conc.js"), "utf8");
-	const count = (content.match(/AI_DEBUG_SNIPPET_START/g) || []).length;
-	eq(count, 2, "both snippets landed (no lost write) — queue serialized mutations");
+	eq((readFileSync(file("conc.js"), "utf8").match(/AI_DEBUG_SNIPPET_START/g) || []).length, 2, "both snippets landed (queue serialized)");
 }
 
-console.log("\n[AC6: schema-valid packet POST to the session target → 200]");
+console.log("\n[AC6: schema-valid packet POST → 200]");
 {
-	const target = "http://localhost:8866";
-	const packet = {
-		log_id: "1698844392123-4",
-		event_timestamp: "2023-11-01T14:53:12.123Z",
-		level: "ERROR",
-		source: { file: "app.js", line: 42, function: "validate" },
-		message: "boom",
-	};
 	const status = await new Promise((resolve) => {
-		const req = http.request(target, { method: "POST", headers: { "content-type": "application/json" } }, (res) => {
-			res.resume();
-			res.on("end", () => resolve(res.statusCode));
-		});
+		const req = http.request("http://localhost:8866", { method: "POST", headers: { "content-type": "application/json" } }, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode)); });
 		req.on("error", () => resolve(0));
-		req.end(JSON.stringify(packet));
+		req.end(JSON.stringify({ log_id: "1", event_timestamp: "2023-11-01T14:53:12.123Z", level: "ERROR", source: { file: "app.js", line: 42, function: "validate" }, message: "boom" }));
 	});
-	eq(status, 200, "server accepts schema-valid packet (the target snippets POST to)");
+	eq(status, 200, "server accepts schema-valid packet");
 }
 
-console.log("\n[teardown: /debugger stop removes remaining snippets]");
+console.log("\n[teardown: /debugger stop]");
 {
-	await cmdHandler("stop", ctx); // stopDebug → cleanupAllSnippets + server close
-	ok(true, "stop completed without error");
+	await cmdHandler("stop", ctx);
+	eq(stateMod.getState(), null, "state cleared on stop");
 }
 
 rmSync(cwd, { recursive: true, force: true });

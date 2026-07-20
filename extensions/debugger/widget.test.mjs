@@ -98,12 +98,15 @@ console.log("\n[renderDebugWidget BUG summary]");
 	ok(out2[idx2 + 1].includes("Login fails for users with an empty email"), "bug summary rendered");
 	ok(!out2[idx2 + 1].includes("No bug described yet"), "placeholder hidden once bug is set");
 
-	// Multi-line bug: newlines split into indented lines.
+	// Multi-line bug: only the first line renders, with an overflow hint.
 	snap.bug = "Login fails for users with an empty email\nOnly affects OAuth sign-in";
 	out2 = renderDebugWidget(snap, theme);
 	idx2 = out2.findIndex((l) => l.includes("<warning>BUG</warning>"));
 	ok(out2[idx2 + 1].includes("Login fails for users with an empty email"), "first bug line rendered");
-	ok(out2[idx2 + 2].includes("Only affects OAuth sign-in"), "second bug line rendered (newline-split)");
+	ok(!out2.some((l) => l.includes("Only affects OAuth sign-in")), "second bug line NOT rendered (collapsed)");
+	ok(out2[idx2 + 1].includes("+1 line") && out2[idx2 + 1].includes("/debugger bug"), "overflow hint points at /debugger bug");
+	// Exactly one content line between the BUG label and the blank separator.
+	eq(out2[idx2 + 2], "", "bug section stays one line tall");
 }
 
 console.log("\n[renderDebugWidget HYPOTHESIS summary]");
@@ -114,14 +117,16 @@ console.log("\n[renderDebugWidget HYPOTHESIS summary]");
 	eq(snap.hypothesis, null, "initial hypothesis is null");
 	ok(out[hypIdx + 1].includes("No hypothesis yet"), "null hypothesis → placeholder line");
 
-	// Counter + multi-line via newline.
+	// Counter + multi-line: only the first line renders, with an overflow hint.
 	snap.hypothesis = "Null deref in validate()\nwhen email is undefined";
 	snap.hypothesisCount = 2;
 	out = renderDebugWidget(snap, theme);
 	hypIdx = out.findIndex((l) => l.includes("HYPOTHESIS"));
 	ok(out[hypIdx].includes("<muted>#2</muted>"), "hypothesis counter rendered");
 	ok(out[hypIdx + 1].includes("Null deref in validate()"), "first hypothesis line rendered");
-	ok(out[hypIdx + 2].includes("when email is undefined"), "second hypothesis line rendered (newline-split)");
+	ok(!out.some((l) => l.includes("when email is undefined")), "second hypothesis line NOT rendered (collapsed)");
+	ok(out[hypIdx + 1].includes("+1 line") && out[hypIdx + 1].includes("/debugger hypothesis"), "overflow hint points at /debugger hypothesis");
+	eq(out[hypIdx + 2], "", "hypothesis section stays one line tall");
 }
 
 console.log(`\n${failures === 0 ? "ALL PASSED" : failures + " FAILURE(S)"}`);

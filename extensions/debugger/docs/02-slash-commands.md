@@ -59,18 +59,26 @@ User override for the bug summary shown in the instrumentation widget (the LLM-s
 `report_bug` tool). No mode/telemetry change.
 
 1. If no active session → notify "No active debug session." and abort.
-2. With trailing text → set the widget bug summary to that text (single-line; multi-line
-   summaries come via `report_bug`).
-3. Bare (`/debugger bug`) → open `ctx.ui.input("Edit bug summary", currentBug)`; `ui.input` has
-   no prefill, so the current bug is shown as placeholder hint text. A blank/empty result clears
-   the bug (`null`).
+2. Bare (`/debugger bug`) → open a read-only scrollable overlay (`TextOverlay`) showing the full
+   bug summary; the widget itself only renders the first line plus an overflow hint.
+3. With trailing text → set the widget bug summary to that text (single-line; multi-line
+   summaries come via `report_bug`). `/debugger bug edit` opens
+   `ctx.ui.input("Edit bug summary", currentBug)`; `ui.input` has no prefill, so the current bug
+   is shown as placeholder hint text. A blank/empty result clears the bug (`null`).
 4. Repaint the widget and notify "Bug summary updated." / "Bug summary cleared."
+
+### `/debugger hypothesis`
+
+Opens the same read-only scrollable overlay showing the full current hypothesis
+(`HYPOTHESIS #<n>`), for hypotheses that overflow the widget's single-line rendering. There is no
+user-edit path — the hypothesis is owned by the `report_hypothesis` tool.
 
 ## Argument handling
 
 `/debugger` accepts an optional trailing arg parsed in a single handler: `local` (default),
-`remote`, `stop`, `logs`, or `bug [text]`. `/debugger bug` with no text opens an edit prompt
-(current bug as placeholder); with text it sets the bug summary directly. Keep `/debugger` (no arg)
+`remote`, `stop`, `logs`, `bug [text]`, or `hypothesis`. `/debugger bug` with no text opens the
+read-only bug overlay; with text it sets the bug summary directly (`bug edit` for the prompt).
+`/debugger hypothesis` opens the read-only hypothesis overlay. Keep `/debugger` (no arg)
 = local to match the spec table exactly.
 
 ## API touchpoints
@@ -93,9 +101,10 @@ User override for the bug summary shown in the instrumentation widget (the LLM-s
 4. `/debugger stop` removes injected snippets, stops server/tunnel, clears widget, restores normal tools.
 5. `/debugger stop` is idempotent (calling when not debugging is a no-op with an info notify).
 6. `/debugger stop` deletes the per-session JSONL log file created for the session.
-7. `/debugger bug [text]` sets the widget bug summary (bare opens an edit prompt; blank clears it);
+7. `/debugger bug` opens the full bug summary in a read-only overlay; `/debugger bug <text>` sets
+   the widget bug summary (`/debugger bug edit` opens an edit prompt; blank clears it);
    the LLM `report_bug(summary)` tool updates the same field. Both are inert (info notify) with no
-   active session.
+   active session. `/debugger hypothesis` opens the full hypothesis in the same read-only overlay.
 
 ## Dependencies / Open Items
 

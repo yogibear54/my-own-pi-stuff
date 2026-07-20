@@ -34,9 +34,9 @@ export interface DebugSnapshot {
 	telemetryTarget: string;
 	/** True while packets are actively arriving. */
 	liveLogging: boolean;
-	/** Summary of the bug under investigation, or null before it's described. Newlines split lines. */
+	/** Summary of the bug under investigation, or null before it's described. Widget shows the first line only; `/debugger bug` opens the full text. */
 	bug: string | null;
-	/** Current hypothesis under test, or null before one is formed. Newlines split lines. */
+	/** Current hypothesis under test, or null before one is formed. Widget shows the first line only; `/debugger hypothesis` opens the full text. */
 	hypothesis: string | null;
 	/** Increments each time a fix fails and a new hypothesis is formed. */
 	hypothesisCount: number;
@@ -95,6 +95,20 @@ function levelColor(level: string): ThemeColor | undefined {
 	return undefined;
 }
 
+/**
+ * Render a possibly multi-line summary (bug / hypothesis) as a single widget
+ * line: the first line plus a dim overflow hint when more lines exist. The
+ * full text is viewable via the given slash command (read-only overlay).
+ */
+function renderSummaryLine(text: string, viewCmd: string, theme: Theme): string {
+	const parts = text.split("\n");
+	const first = parts[0] ?? "";
+	if (parts.length === 1) return `  ${first}`;
+	const extra = parts.length - 1;
+	const hint = theme.fg("dim", ` … (+${extra} line${extra === 1 ? "" : "s"} — ${viewCmd} to view)`);
+	return `  ${first}${hint}`;
+}
+
 /** Compact one-liner for the widget tail: `LEVEL file:line fn — message`. */
 export function formatPacketCompact(p: TelemetryPacket, theme: Theme): string {
 	const lc = levelColor(p.level);
@@ -151,7 +165,7 @@ export function renderDebugWidget(snapshot: DebugSnapshot, theme: Theme): string
 	if (snapshot.bug === null) {
 		lines.push(`  ${theme.fg("dim", "No bug described yet.")}`);
 	} else {
-		for (const line of snapshot.bug.split("\n")) lines.push(`  ${line}`);
+		lines.push(renderSummaryLine(snapshot.bug, "/debugger bug", theme));
 	}
 	lines.push("");
 
@@ -162,7 +176,7 @@ export function renderDebugWidget(snapshot: DebugSnapshot, theme: Theme): string
 	if (snapshot.hypothesis === null) {
 		lines.push(`  ${theme.fg("dim", "No hypothesis yet — waiting for context.")}`);
 	} else {
-		for (const line of snapshot.hypothesis.split("\n")) lines.push(`  ${line}`);
+		lines.push(renderSummaryLine(snapshot.hypothesis, "/debugger hypothesis", theme));
 	}
 	lines.push("");
 

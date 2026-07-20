@@ -53,12 +53,12 @@ HTTP Log Server (:8866)  ──append──►  .pi/logs/<session>.log  (JSONL)
 debugger/
 ├── index.ts          # entry: wires commands, tools, events; owns session lifecycle
 ├── server.ts         # HTTP log server (node:http)
-├── state.ts          # debug session state machine + persistence (appendEntry)
-├── widget.ts         # instrumentation widget rendering + packet buffer
-├── snippets.ts       # snippet delimiter parsing / generation helpers
-├── tools.ts          # inject_snippet / remove_snippet / debug-state tools
-└── skill/
-    └── SKILL.md      # debugging-loop skill (LLM behavior + loop steps)
+├── state.ts          # debug state machine + persisted snippet map (appendEntry)  ✅
+├── widget.ts         # instrumentation widget rendering + packet buffer  ✅
+├── snippets.ts       # snippet delimiter parsing / generation helpers  ✅
+└── tools.ts          # report_bug / snippet / transition tools  ✅
+                      # (no skill/SKILL.md — pi has no extension skill API;
+                      #  loop guidance is the before_agent_start injection in index.ts)
 ```
 
 Standard Pi discovery locations: `~/.pi/agent/extensions/debugger/index.ts` (global) or

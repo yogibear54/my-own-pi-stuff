@@ -1,13 +1,15 @@
 /**
- * Snippet tools — inject / remove / list / cleanup delimited telemetry snippets.
+ * Snippet + transition tools for the debug loop.
  *
- * Registered via {@link registerSnippetTools}, which is called once from
- * index.ts with an accessor for the active session snapshot. Each tool is gated
- * on an active debug session (inert info result otherwise — there is no tool
- * unregister API, mirroring `report_bug`). Pure file-mutation helpers come from
- * ./snippets.ts; this module owns the in-memory snippet registry.
+ * - registerSnippetTools: inject / remove / list / cleanup telemetry snippets.
+ * - registerReportBugTool:  record/revise the bug summary (mutation via applyBug).
+ * - registerTransitionTools: report_hypothesis / request_user_test / debug_summary.
  *
- * Reference: docs/04-snippet-injection-cleanup.md
+ * Snippet tracking + the state machine live in ./state.ts (persisted); this module
+ * owns the tool registrations and the file-mutation logic. All tools are gated on
+ * an active session (inert otherwise — there is no unregister API).
+ *
+ * Reference: docs/04-snippet-injection-cleanup.md, docs/05-debugging-loop.md
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { DebugSnapshot } from "./widget.ts";
@@ -17,53 +19,29 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { commentStyleFor, findSnippets, generateSnippetBlock, injectIntoLines, removeSpan } from "./snippets.ts";
+import * as state from "./state.ts";
 
-/** A snippet tracked in the session registry. */
-interface TrackedSnippet {
-	/** Absolute file path. */
-	file: string;
-	/** Human label. */
-	name: string;
-	/** 1-based line of the START delimiter (where it was injected). */
-	line: number;
-}
-
-/** Session snippet registry: id → tracked snippet. */
-const registry = new Map<number, TrackedSnippet>();
-/** Next auto-assigned snippet id. */
-let nextId = 1;
-
-/** Clear the registry and reset the id counter (called on session start/stop). */
-export function resetSnippets(): void {
-	registry.clear();
-	nextId = 1;
-}
-
-/**
- * Resolve a snippet id. If `requested` is present and unused it is taken as-is;
- * otherwise the next free session id is auto-assigned (hybrid policy).
- */
-function assignId(requested: number | undefined): number {
-	if (requested != null && !registry.has(requested)) return requested;
-	while (registry.has(nextId)) nextId++;
-	return nextId++;
-}
+/** Inert result returned when no debug session is active. */
+const inert = () => ({
+	content: [{ type: "text" as const, text: "No active debug session. Start one with /debugger." }],
+	details: undefined,
+});
 
 /**
  * Remove every tracked snippet from disk (called by the `cleanup_all_snippets`
- * tool and by `/debugger stop`). Keeps any accepted fix — snippets ≠ fix.
- * Per-file read-modify-write runs inside `withFileMutationQueue`. Best-effort:
- * returns a per-file error list rather than throwing.
+ * tool, by `request_user_test`, and by `/debugger stop`). Keeps any accepted fix
+ * (snippets ≠ fix). Per-file read-modify-write runs inside `withFileMutationQueue`.
+ * Best-effort: returns a per-file error list rather than throwing.
  */
 export async function cleanupAllSnippets(): Promise<{ removed: number; errors: string[] }> {
 	let removed = 0;
 	const errors: string[] = [];
-	// Group tracked ids by file so each file is mutated once.
 	const byFile = new Map<string, Set<number>>();
-	for (const [id, s] of registry) {
-		const set = byFile.get(s.file) ?? new Set<number>();
-		set.add(id);
-		byFile.set(s.file, set);
+	for (const [idStr, info] of Object.entries(state.getSnippetMap())) {
+		if (!info.file) continue; // skip untracked placeholders
+		const set = byFile.get(info.file) ?? new Set<number>();
+		set.add(Number(idStr));
+		byFile.set(info.file, set);
 	}
 	for (const [file, ids] of byFile) {
 		try {
@@ -72,7 +50,6 @@ export async function cleanupAllSnippets(): Promise<{ removed: number; errors: s
 				const spans = findSnippets(content).filter((sp) => ids.has(sp.id));
 				if (spans.length === 0) return 0;
 				let lines = content.split("\n");
-				// Remove bottom-to-top so earlier line numbers stay valid.
 				spans.sort((a, b) => b.startLine - a.startLine);
 				for (const sp of spans) lines = removeSpan(lines, sp.startLine, sp.endLine);
 				await writeFile(file, lines.join("\n"), "utf8");
@@ -82,21 +59,11 @@ export async function cleanupAllSnippets(): Promise<{ removed: number; errors: s
 			errors.push(`${file}: ${(e as Error).message}`);
 		}
 	}
-	registry.clear();
+	state.clearSnippets();
 	return { removed, errors };
 }
 
-/** Inert result returned when no debug session is active. */
-const inert = () => ({
-	content: [{ type: "text" as const, text: "No active debug session. Start one with /debugger." }],
-	details: undefined,
-});
-
-/**
- * Register the four snippet tools (inject / remove / list / cleanup) on `pi`.
- * `getSnapshot` returns the live session snapshot or null; tools are inert when
- * it is null.
- */
+/** Register inject / remove / list / cleanup snippet tools. */
 export function registerSnippetTools(pi: ExtensionAPI, getSnapshot: () => DebugSnapshot | null): void {
 	pi.registerTool({
 		name: "inject_snippet",
@@ -105,7 +72,7 @@ export function registerSnippetTools(pi: ExtensionAPI, getSnapshot: () => DebugS
 			"Insert a delimited telemetry snippet into a source file. The snippet body should POST a log packet (Part 1 schema) to the session telemetry target. Use this (not raw edit) for telemetry so cleanup is reliable.",
 		promptSnippet: "inject_snippet(path, line, name, language, code, id?) — add a delimited telemetry snippet to a file",
 		promptGuidelines: [
-			"Always wrap telemetry code in AI_DEBUG_SNIPPET_START/END delimiters by using inject_snippet (not raw edit), so cleanup_all_snippets can remove it reliably.",
+			"Always wrap telemetry code in AI_DEBUG_SNIPPET_START/END delimiters by using inject_snippet (not raw edit), so cleanup can remove it reliably.",
 			"The snippet body must POST a packet matching the log schema (log_id, event_timestamp, level, source{file,line,function}, message, optional variables) to the current telemetry target.",
 			"Use remove_snippet / cleanup_all_snippets to remove telemetry. Fixes are separate from snippets and are kept on cleanup.",
 			"commentStyleFor dispatches by language: block (C-family incl. PHP), hash (Python/Ruby/Shell), liquid (Shopify {% comment %}). Liquid cannot POST from the template — emit telemetry from the surrounding host app.",
@@ -123,24 +90,26 @@ export function registerSnippetTools(pi: ExtensionAPI, getSnapshot: () => DebugS
 			const telemetryTarget = getSnapshot()!.telemetryTarget;
 			const norm = params.path.replace(/^@+/, "");
 			const abs = isAbsolute(norm) ? norm : resolve(ctx.cwd, norm);
+			let reserved: number | null = null;
 			try {
 				const res = await withFileMutationQueue(abs, async () => {
 					const content = await readFile(abs, "utf8");
 					const lines = content.split("\n");
 					const at = Math.max(1, Math.min(params.line, lines.length + 1));
-					const assigned = assignId(params.id);
+					reserved = state.assignSnippetId(params.id); // reserves immediately (race-safe)
 					const style = commentStyleFor(params.language);
-					const block = generateSnippetBlock(assigned, params.name, params.language, params.code);
+					const block = generateSnippetBlock(reserved, params.name, params.language, params.code);
 					const next = injectIntoLines(lines, at, block);
 					await writeFile(abs, next.join("\n"), "utf8");
-					registry.set(assigned, { file: abs, name: params.name, line: at });
-					return { assigned, style, at };
+					state.trackSnippet(reserved, { file: abs, name: params.name, line: at }); // fill real info
+					return { assigned: reserved, style, at };
 				});
 				return {
 					content: [{ type: "text" as const, text: `Injected snippet ID=${res.assigned} (${res.style} style) into ${norm} at line ${res.at}. POST telemetry to ${telemetryTarget}.` }],
 					details: undefined,
 				};
 			} catch (e) {
+				if (reserved != null) state.untrackSnippet(reserved); // release reservation on failure
 				return { content: [{ type: "text" as const, text: `inject_snippet failed: ${(e as Error).message}` }], details: undefined };
 			}
 		},
@@ -149,7 +118,7 @@ export function registerSnippetTools(pi: ExtensionAPI, getSnapshot: () => DebugS
 	pi.registerTool({
 		name: "remove_snippet",
 		label: "Remove Telemetry Snippet",
-		description: "Remove one snippet (by id) or all tracked snippets from a file. Keeps surrounding code intact.",
+		description: "Remove one snippet (by id) or all tracked snippets in a file. Keeps surrounding code intact.",
 		promptSnippet: "remove_snippet(path, id?) / {path, all:true} — remove telemetry snippet(s) from a file",
 		parameters: Type.Object({
 			path: Type.String({ description: "File containing the snippet." }),
@@ -166,7 +135,9 @@ export function registerSnippetTools(pi: ExtensionAPI, getSnapshot: () => DebugS
 					let targetIds: Set<number>;
 					if (params.all) {
 						targetIds = new Set(
-							[...registry.entries()].filter(([, s]) => s.file === abs).map(([id]) => id),
+							Object.entries(state.getSnippetMap())
+								.filter(([, info]) => info.file === abs)
+								.map(([id]) => Number(id)),
 						);
 					} else if (params.id != null) {
 						targetIds = new Set([params.id]);
@@ -179,7 +150,7 @@ export function registerSnippetTools(pi: ExtensionAPI, getSnapshot: () => DebugS
 					spans.sort((a, b) => b.startLine - a.startLine);
 					for (const sp of spans) lines = removeSpan(lines, sp.startLine, sp.endLine);
 					await writeFile(abs, lines.join("\n"), "utf8");
-					for (const id of targetIds) registry.delete(id);
+					for (const id of targetIds) state.untrackSnippet(id);
 					return spans.length;
 				});
 				return {
@@ -209,7 +180,12 @@ export function registerSnippetTools(pi: ExtensionAPI, getSnapshot: () => DebugS
 				const spans = findSnippets(content).map((sp) => ({ id: sp.id, name: sp.name, file: norm, line: sp.startLine }));
 				return { content: [{ type: "text" as const, text: JSON.stringify(spans, null, 2) }], details: undefined };
 			}
-			const tracked = [...registry.entries()].map(([id, s]) => ({ id, name: s.name, file: s.file, line: s.line }));
+			const tracked = Object.entries(state.getSnippetMap()).map(([id, info]) => ({
+				id: Number(id),
+				name: info.name,
+				file: info.file,
+				line: info.line,
+			}));
 			return { content: [{ type: "text" as const, text: JSON.stringify(tracked, null, 2) }], details: undefined };
 		},
 	});
@@ -217,7 +193,7 @@ export function registerSnippetTools(pi: ExtensionAPI, getSnapshot: () => DebugS
 	pi.registerTool({
 		name: "cleanup_all_snippets",
 		label: "Cleanup All Snippets",
-		description: "Remove every tracked telemetry snippet from the session. Keeps any accepted fix (snippets ≠ fix). Called automatically on /debugger stop.",
+		description: "Remove every tracked telemetry snippet from the session. Keeps any accepted fix (snippets ≠ fix). Called automatically on /debugger stop and after a fix is accepted.",
 		promptSnippet: "cleanup_all_snippets() — remove all telemetry snippets, keep fixes",
 		parameters: Type.Object({}),
 		async execute(_id, _params, _signal, _onUpdate, _ctx) {
@@ -236,8 +212,7 @@ export function registerSnippetTools(pi: ExtensionAPI, getSnapshot: () => DebugS
  * Register the `report_bug` tool (LLM-side producer for the bug summary shown in
  * the instrumentation widget). The mutation helper `applyBug` is owned by
  * index.ts — it also serves the `/debugger bug` command and touches
- * session-owned state (snapshot/paintUi) — so it is passed in here rather than
- * duplicated. Inert when no session is active.
+ * session-owned state — so it is passed in here rather than duplicated.
  */
 export function registerReportBugTool(
 	pi: ExtensionAPI,
@@ -272,6 +247,135 @@ export function registerReportBugTool(
 				],
 				details: undefined,
 			};
+		},
+	});
+}
+
+/** Accessor the transition tools need from index.ts (session-owned concerns). */
+export interface TransitionAccessor {
+	isActive: () => boolean;
+	getSnapshot: () => DebugSnapshot | null;
+	/** Repaint the widget from the current snapshot. */
+	repaint: () => void;
+	/** Stop the debug session (debug_summary "Exit"). */
+	stop: (ctx: ExtensionContext) => Promise<void>;
+}
+
+/** Register the debugging-loop transition tools. */
+export function registerTransitionTools(pi: ExtensionAPI, a: TransitionAccessor): void {
+	pi.registerTool({
+		name: "report_hypothesis",
+		label: "Report Hypothesis",
+		description:
+			"Record the current defect hypothesis (suspected cause + files/functions). Transitions the debugger to HYPOTHESIS & BUG VALIDATION and resets the attempt counter.",
+		promptSnippet: "report_hypothesis(hypothesis, files?, functions?) — state the suspected cause",
+		promptGuidelines: [
+			"Once you have enough context to form a hypothesis, call report_hypothesis with the suspected cause (and the files/functions involved). Then use inject_snippet to add telemetry and request_user_test to ask the user to reproduce.",
+		],
+		parameters: Type.Object({
+			hypothesis: Type.String({ description: "The suspected cause of the bug." }),
+			files: Type.Optional(Type.Array(Type.String(), { description: "Suspected source files." })),
+			functions: Type.Optional(Type.Array(Type.String(), { description: "Suspected functions/methods." })),
+		}),
+		async execute(_id, params, _signal, _onUpdate, _ctx) {
+			if (!a.isActive()) return inert();
+			const detail = [
+				params.files?.length ? `Files: ${params.files.join(", ")}` : "",
+				params.functions?.length ? `Functions: ${params.functions.join(", ")}` : "",
+			]
+				.filter(Boolean)
+				.join("\n");
+			state.reportHypothesis(detail ? `${params.hypothesis}\n${detail}` : params.hypothesis);
+			const s = state.getState()!;
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `Hypothesis #${s.hypothesisCount} recorded (state → HYPOTHESIS & BUG VALIDATION). Inject telemetry with inject_snippet, then call request_user_test with reproduction steps.`,
+					},
+				],
+				details: undefined,
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "request_user_test",
+		label: "Request User Test",
+		description:
+			'Show reproduction steps and ask the user whether the bug is fixed. Advances the loop: "Bug Fixed" → telemetry cleanup (fix kept), then call debug_summary; "Continue to Debug" → revert the fix + re-instrument (or, at max attempts, back to AWAITING CONTEXT).',
+		promptSnippet: "request_user_test(steps) — ask the user to reproduce; their answer advances the loop",
+		parameters: Type.Object({
+			steps: Type.Array(Type.String(), { description: "Step-by-step reproduction instructions for the user." }),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			if (!a.isActive()) return inert();
+			const snap = a.getSnapshot();
+			if (snap) {
+				snap.body = [...params.steps, "", "↑ Reply:  (1) Bug Fixed   (2) Continue to Debug"];
+				a.repaint();
+			}
+			const choice = await ctx.ui.select("Reproduced?", ["Bug Fixed", "Continue to Debug"]);
+			const max = state.DEFAULT_MAX_ATTEMPTS;
+			if (choice === "Bug Fixed") {
+				await cleanupAllSnippets();
+				state.recordTestResult("fixed");
+				return {
+					content: [
+						{ type: "text" as const, text: "Marked BUG FIXED — telemetry removed, fix kept. Call debug_summary with a summary of the bug and the fix." },
+					],
+					details: undefined,
+				};
+			}
+			await cleanupAllSnippets();
+			const result = state.recordTestResult("continue");
+			if (result === "AWAITING CONTEXT") {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Still broken after ${max} attempts → back to AWAITING CONTEXT. Ask the user for more context (logs, stack trace, screenshots, etc.).`,
+						},
+					],
+					details: undefined,
+				};
+			}
+			const s = state.getState()!;
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `Not fixed (attempt ${s.attempts}/${max}); telemetry removed. Revert your failed fix, then call report_hypothesis with a new hypothesis.`,
+					},
+				],
+				details: undefined,
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "debug_summary",
+		label: "Debug Summary",
+		description: "Finalize: show a bug+fix summary and ask the user to exit Debug mode or continue with a new bug.",
+		promptSnippet: "debug_summary(summary) — wrap up after a fix is accepted",
+		parameters: Type.Object({
+			summary: Type.String({ description: "Summary of the bug and the fix applied." }),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			if (!a.isActive()) return inert();
+			state.transition("DEBUG SUMMARY");
+			const snap = a.getSnapshot();
+			if (snap) {
+				snap.body = [params.summary, "", "↑ Reply:  (1) Exit Debug mode   (2) Continue (new bug)"];
+				a.repaint();
+			}
+			const choice = await ctx.ui.select("Debug complete — what next?", ["Exit Debug mode", "Continue (new bug)"]);
+			if (choice?.startsWith("Exit")) {
+				await a.stop(ctx);
+				return { content: [{ type: "text" as const, text: "Debug session stopped." }], details: undefined };
+			}
+			state.resetForNewBug();
+			return { content: [{ type: "text" as const, text: "Reset to AWAITING CONTEXT — ready for a new bug." }], details: undefined };
 		},
 	});
 }

@@ -2,7 +2,7 @@
 
 > Part of the [Pi AI Debugger](./ARCHITECTURE.md). Source requirements: `requirements.md` → "Log Snippet Code Injection" and "Log Snippet Code Cleanup".
 >
-> **Status: Implemented** in `snippets.ts` (pure helpers) + `tools.ts` (tool factory + registry), wired into `index.ts`. Id policy = **hybrid** (model may pass an `id`; tool auto-assigns if omitted/collides). Registry is **ephemeral** for now — Part 5 makes it resume-safe via `appendEntry`.
+> **Status: Implemented** in `snippets.ts` (pure helpers) + `tools.ts` (tool factory), wired into `index.ts`. Id policy = **hybrid** (model may pass an `id`; tool auto-assigns if omitted/collides, reserving it race-safe). Snippet tracking is persisted in `state.ts` (Part 5; resume-safe).
 
 ## Purpose
 
@@ -102,10 +102,12 @@ Register `promptSnippet` + `promptGuidelines` on these tools so the model:
 
 ## Tracking
 
-An in-memory session registry `{ id → { file, name, line } }` (in `tools.ts`) makes
-`/debugger stop` and "remove on failed fix" deterministic even if the model forgets a file.
-**Persistence is deferred to Part 5** (`appendEntry`) so a `/resume` can still clean up; today the
-registry is ephemeral and reset on start/stop.
+The snippet map `{ id → { file, name, line } }` is owned by **`state.ts`** (persisted via
+`appendEntry("debugger", …)`, restored on `session_start`). `tools.ts` reads/writes through
+state accessors: `assignSnippetId` (hybrid + reserves immediately, race-safe), `trackSnippet`,
+`untrackSnippet`, `getSnippetMap`, `clearSnippets`. This makes `/debugger stop` and "remove on
+failed fix" deterministic **and resume-safe** (Part 5): a `/resume` reconstructs the map so
+cleanup still works.
 
 ## Acceptance Criteria
 

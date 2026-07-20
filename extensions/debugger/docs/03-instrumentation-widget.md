@@ -13,15 +13,17 @@ which matches the default above-editor widget region.
 1. **Header** — current debug status state, `LIVE LOGGING` indicator (when packets are flowing),
    inbound port info (and ngrok URL in remote mode). For local frontend JS/TS the user can
    `fetch()` the endpoint directly — surface that hint.
-2. **Bug summary** — a `BUG` label on its own line followed by one or more indented lines
+2. **Bug summary** — a `BUG` label on its own line followed by a single indented line
    summarizing the bug under investigation. `null` (placeholder) until the bug is described.
-   The summary is a single string in `DebugSnapshot.bug: string | null`; newlines split it into
-   lines. Populated by the `report_bug` tool; the user can set/clear it via
-   `/debugger bug [text]` (bare opens an edit prompt).
+   The summary is a single string in `DebugSnapshot.bug: string | null`; the widget renders
+   only its first line plus an overflow hint when more lines exist. The full text opens in a
+   read-only overlay via `/debugger bug`. Populated by the `report_bug` tool; the user can
+   set it via `/debugger bug <text>` and edit it via a prompt with `/debugger bug edit`.
 3. **Hypothesis statement** — static display of the current hypothesis under test + a hypothesis
    counter (increments each time a fix fails and a new hypothesis is formed). The hypothesis is a
-   single string in `DebugSnapshot.hypothesis: string | null`; newlines split it into lines, with
-   the label + counter on the header line and each line indented below. (Populated by the Part 5
+   single string in `DebugSnapshot.hypothesis: string | null`; like the bug summary, the widget
+   renders only its first line (with an overflow hint), and the full text opens in a read-only
+   overlay via `/debugger hypothesis`. (Populated by the Part 5
    `report_hypothesis` tool.)
 4. **Log stream** — pretty-printed recent packets; scrollable, can scroll back to review history.
    Only shown when injected snippets are active and emitting.
@@ -75,8 +77,8 @@ is therefore split into two surfaces, both now implemented:
   scroll overlay; `done()` closes it. See `examples/extensions/overlay-test.ts` / `snake.ts`.
 - `ctx.ui.setStatus("debugger", ...)` for a footer chip.
 - `/debugger` starts the log server (`server.ts`) and opens the overlay; `/debugger logs` reopens
-  it; `/debugger stop` closes server + overlay + widget. `/debugger bug [text]` sets/edits the
-  bug summary shown in the widget (bare opens an edit prompt); the LLM-side path is the
+  it; `/debugger stop` closes server + overlay + widget. `/debugger bug` opens the full bug
+  summary in a read-only overlay; the LLM-side path is the
   `report_bug` tool.
 - The server's `onPacket(packet)` callback pushes to the session packet buffer, repaints the
   widget tail, and calls `overlay.refresh()` when open. UI context is captured on `session_start`
@@ -87,10 +89,12 @@ is therefore split into two surfaces, both now implemented:
 1. Widget renders above the editor only while a debug session is active; gone after `/debugger stop`.
 2. Header shows current state, port (8866 or ngrok URL), and a `LIVE LOGGING` indicator that
    appears while packets are arriving.
-3. Bug summary region shows the current bug description; placeholder until the bug is described,
-   and supports multi-line summaries. Populated by `report_bug`; user-editable via `/debugger bug`.
+3. Bug summary region shows the current bug description; placeholder until the bug is described.
+   Multi-line summaries are collapsed to their first line with an overflow hint; `/debugger bug`
+   opens the full text in a read-only overlay. Populated by `report_bug`; user-settable via
+   `/debugger bug <text>`.
 4. Hypothesis region shows the current hypothesis + counter; counter increments on failed fixes.
-   The hypothesis may span multiple lines.
+   Multi-line hypotheses collapse the same way; `/debugger hypothesis` opens the full text.
 5. Log stream shows pretty-printed packets (compact one-liner tail in-widget; expanded block
    in the `/debugger logs` overlay) and updates live as packets arrive.
 6. The overlay scrolls back through full history (`↑/↓`, `PgUp/PgDn`, `Home/End`),
