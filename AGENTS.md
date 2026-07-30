@@ -63,3 +63,21 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
+## 5. Pi Agent Config Layout (this machine)
+
+**Source of truth is `~/.pi/agent-git/` (git-tracked).** `~/.pi/agent/`
+is NOT the source — it holds symlinks into `agent-git/`, toggled by the
+`/system` command (the `system-manager` extension).
+
+When creating or editing agent config, write to `~/.pi/agent-git/`:
+- Skills → `skills/<name>/`   • Extensions → `extensions/<name>.ts`
+- Prompts → `prompts/`        • Utils → `utils/`
+- Root config (AGENTS.md, SYSTEM.md, models.json, …) → repo root
+
+**Never write directly to `~/.pi/agent/`** — those are symlinks that
+`/system` will overwrite or remove. After adding a new item, tell the
+user to run `/system`, toggle it active (✓), then `/reload`. This
+AGENTS.md is itself symlinked, so editing the `agent-git` copy is enough.
