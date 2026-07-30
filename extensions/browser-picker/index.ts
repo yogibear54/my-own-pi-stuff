@@ -13,8 +13,12 @@ import { WebSocketServer, type WebSocket } from "ws";
  *   - Each element may carry `data-pi-file` (project-relative path) and
  *     `data-pi-line` (number), injected at build time.
  *   - On click, the Chrome extension sends:
- *       { type: "element_selected", file, line, tag, outerHTML,
- *         ancestorChain: string[], url }
+ *       { type: "element_selected", file, line, tag, outerHTML, text,
+ *         parentOuterHTML, ancestorChain: string[], url }
+ *     `file`/`line` are present only when a build-plugin tag is found. When
+ *     absent, `text` and the class tokens in `outerHTML`/`ancestorChain` let Pi
+ *     locate the source via project-wide grep, and `url` (path) maps to the
+ *     route/template file.
  */
 
 const PORT = 7878;
@@ -73,28 +77,42 @@ export default function (pi: ExtensionAPI) {
     const outerHTML = typeof msg.outerHTML === "string" ? msg.outerHTML : "";
     const chain = Array.isArray(msg.ancestorChain) ? (msg.ancestorChain as string[]) : [];
     const url = typeof msg.url === "string" ? msg.url : "";
+    const text = typeof msg.text === "string" ? msg.text : "";
+    const parentOuterHTML = typeof msg.parentOuterHTML === "string" ? msg.parentOuterHTML : "";
 
+    let path = "";
+    try {
+      if (url) path = new URL(url).pathname;
+    } catch {
+      /* ignore malformed url */
+    }
+
+    // When the build plugin tagged the element, point straight at file:line.
+    // Otherwise, hand the LLM the fingerprints it needs to locate the source:
+    // the text + class tokens (grep) and the URL path (route → template).
     const sourceLine = file
       ? `${file}${line != null ? ":" + line : ""}`
-      : "(no data-pi-file attribute — is the build plugin active on this app?)";
+      : `(source not instrumented — locate it: grep the text/class tokens below` +
+        (path ? ` and resolve the URL path "${path}" to its template file` : "") +
+        `)`;
 
-    const text =
+    let out =
       `User selected an element in the browser${url ? ` at ${url}` : ""}.\n` +
       `Element: <${tag}>\n` +
-      `Source: ${sourceLine}\n` +
-      (chain.length ? `Ancestors: ${chain.join(" > ")}\n` : "") +
-      `\n` +
-      "```html\n" + outerHTML + "\n```";
+      `Source: ${sourceLine}\n`;
+    if (text) out += `Text: ${JSON.stringify(text)}\n`;
+    if (chain.length) out += `Ancestors: ${chain.join(" > ")}\n`;
+    out += "\n" + "```html\n" + outerHTML + "\n```\n";
+    if (parentOuterHTML)
+      out += "\nParent context (element has no own text):\n```html\n" + parentOuterHTML + "\n```\n";
 
-    // If idle, trigger a turn now. If Pi is busy, queue as a follow-up.
-    // if (sessionCtx?.isIdle()) {
-    //   void pi.sendUserMessage(text);
-    // } else {
-    //   void pi.sendUserMessage(text, { deliverAs: "followUp" });
-    // }
-
-    console.log(text);
     // Prefill the input editor so the user can review before sending.
-    sessionCtx?.ui.pasteToEditor(text + "\n");
+    // sessionCtx?.ui.pasteToEditor(out + "\n");
+    // If idle, trigger a turn now. If Pi is busy, queue as a follow-up.
+    if (sessionCtx?.isIdle()) {
+      void pi.sendUserMessage(out);
+    } else {
+      void pi.sendUserMessage(out, { deliverAs: "followUp" });
+    }
   }
 }

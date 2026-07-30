@@ -142,12 +142,29 @@
     const html = current.outerHTML || "";
     const MAX = 20000;
     const outerHTML = html.length > MAX ? html.slice(0, MAX) + "\n<!-- truncated -->" : html;
+
+    // Own text content — the highest-signal grep target for locating the source
+    // file when no build-plugin tag is present. Collapse whitespace, cap length.
+    const rawText = (current.textContent || "").replace(/\s+/g, " ").trim();
+    const text = rawText.length > 200 ? rawText.slice(0, 200) + "\u2026" : rawText;
+
+    // Parent markup for surrounding context, but only when the element has no
+    // own text (otherwise the text alone is the best grep target). Capped.
+    let parentOuterHTML = "";
+    if (!text && current.parentElement) {
+      const phtml = current.parentElement.outerHTML || "";
+      parentOuterHTML =
+        phtml.length > 800 ? phtml.slice(0, 800) + "\n<!-- truncated -->" : phtml;
+    }
+
     chrome.runtime.sendMessage({
       type: "element_selected",
       tag: current.tagName.toLowerCase(),
       file: src.file,
       line: src.line,
       outerHTML,
+      text,
+      parentOuterHTML,
       ancestorChain: ancestorChain(current),
       url: location.href,
     });
