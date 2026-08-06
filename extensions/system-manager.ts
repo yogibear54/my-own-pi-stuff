@@ -2,9 +2,11 @@
  * System Manager Extension
  *
  * Provides a /system command to enable/disable skills, extensions, prompts,
- * utils, and root config files via symbolic links between agent-git/ and agent/.
+ * utils, and root config files via symbolic links into agent/.
  *
- * Source: ~/.pi/agent-git/{category}/item
+ * Sources:
+ *   ~/.pi/agent-git/{category}/item
+ *   ~/.agents/skills/item  (skills only)
  * Target: ~/.pi/agent/{category}/item  (symlink)
  *
  * Items marked with ✓ are symlinked (active), items with ✗ are not (inactive).
@@ -36,6 +38,7 @@ const AGENT_GIT = process.env.PI_AGENT_GIT_DIR
 	? resolve(process.env.PI_AGENT_GIT_DIR)
 	: AGENT_GIT_DEFAULT;
 const AGENT = join(HOME, ".pi", "agent");
+const AGENTS_SKILLS = join(HOME, ".agents", "skills");
 
 // Root files that should NOT be linkable
 const ROOT_EXCLUDE = new Set([
@@ -70,6 +73,12 @@ function buildCategories(sourceDir: string): Category[] {
 		{
 			name: "Skills",
 			sourceDir: join(sourceDir, "skills"),
+			targetDir: join(AGENT, "skills"),
+			type: "dir",
+		},
+		{
+			name: "Agent Skills",
+			sourceDir: AGENTS_SKILLS,
 			targetDir: join(AGENT, "skills"),
 			type: "dir",
 		},
@@ -196,7 +205,11 @@ export default function systemManager(pi: ExtensionAPI) {
 				}
 			}
 
-			if (allItems.length === 0) {
+			const hasPrimarySourceItems = allItems.some(
+				(item) => item.category.name !== "Agent Skills",
+			);
+
+			if (!hasPrimarySourceItems) {
 				const userPath = await ctx.ui.input(
 					"Source directory not found. Enter path to source directory:",
 					AGENT_GIT_DEFAULT,
@@ -206,6 +219,7 @@ export default function systemManager(pi: ExtensionAPI) {
 					const newSource = resolve(userPath.trim());
 					categories = buildCategories(newSource);
 					CATEGORIES = categories;
+					allItems.length = 0;
 
 					for (const cat of categories) {
 						const items = getItems(cat);
@@ -322,7 +336,10 @@ export default function systemManager(pi: ExtensionAPI) {
 				);
 				container.addChild(
 					new Text(
-						theme.fg("muted", "  Toggle symlinks: agent-git/ → agent/"),
+						theme.fg(
+							"muted",
+							"  Toggle symlinks: agent-git/ or ~/.agents/skills/ → agent/",
+						),
 						1,
 						0,
 					),
