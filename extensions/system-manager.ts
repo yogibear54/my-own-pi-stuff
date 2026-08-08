@@ -6,7 +6,7 @@
  *
  * Sources:
  *   ~/.pi/agent-git/{category}/item
- *   ~/.agents/skills/item  (skills only)
+ *   ~/.agents-3rdparty/<provider>/skills/item  (3rd-party skills)
  * Target: ~/.pi/agent/{category}/item  (symlink)
  *
  * Items marked with ✓ are symlinked (active), items with ✗ are not (inactive).
@@ -38,7 +38,7 @@ const AGENT_GIT = process.env.PI_AGENT_GIT_DIR
 	? resolve(process.env.PI_AGENT_GIT_DIR)
 	: AGENT_GIT_DEFAULT;
 const AGENT = join(HOME, ".pi", "agent");
-const AGENTS_SKILLS = join(HOME, ".agents", "skills");
+const AGENTS_3RDPARTY = join(HOME, ".agents-3rdparty");
 
 // Root files that should NOT be linkable
 const ROOT_EXCLUDE = new Set([
@@ -54,6 +54,27 @@ interface Category {
 	targetDir: string;
 	type: "file" | "dir" | "mixed";
 	extension?: string; // when type === "file", only include files with this suffix
+}
+
+function discoverThirdPartySkillCategories(): Category[] {
+	if (!existsSync(AGENTS_3RDPARTY)) return [];
+	const providers = readdirSync(AGENTS_3RDPARTY, { withFileTypes: true })
+		.filter((d) => d.isDirectory() && !d.name.startsWith("."))
+		.map((d) => d.name)
+		.sort();
+
+	const categories: Category[] = [];
+	for (const provider of providers) {
+		const skillsDir = join(AGENTS_3RDPARTY, provider, "skills");
+		if (!existsSync(skillsDir)) continue;
+		categories.push({
+			name: `3rd-party · ${provider}`,
+			sourceDir: skillsDir,
+			targetDir: join(AGENT, "skills", provider),
+			type: "dir",
+		});
+	}
+	return categories;
 }
 
 function buildCategories(sourceDir: string): Category[] {
@@ -76,12 +97,7 @@ function buildCategories(sourceDir: string): Category[] {
 			targetDir: join(AGENT, "skills"),
 			type: "dir",
 		},
-		{
-			name: "Agent Skills",
-			sourceDir: AGENTS_SKILLS,
-			targetDir: join(AGENT, "skills"),
-			type: "dir",
-		},
+		...discoverThirdPartySkillCategories(),
 		{
 			name: "Prompts",
 			sourceDir: join(sourceDir, "prompts"),
@@ -97,8 +113,6 @@ function buildCategories(sourceDir: string): Category[] {
 		},
 	];
 }
-
-let CATEGORIES: Category[] = buildCategories(AGENT_GIT);
 
 function getItems(category: Category): string[] {
 	if (!existsSync(category.sourceDir)) return [];
@@ -191,7 +205,7 @@ export default function systemManager(pi: ExtensionAPI) {
 				active: boolean;
 			}
 
-			let categories = CATEGORIES;
+			let categories = buildCategories(AGENT_GIT);
 			const allItems: ItemInfo[] = [];
 
 			for (const cat of categories) {
@@ -206,7 +220,7 @@ export default function systemManager(pi: ExtensionAPI) {
 			}
 
 			const hasPrimarySourceItems = allItems.some(
-				(item) => item.category.name !== "Agent Skills",
+				(item) => !item.category.name.startsWith("3rd-party"),
 			);
 
 			if (!hasPrimarySourceItems) {
@@ -218,7 +232,6 @@ export default function systemManager(pi: ExtensionAPI) {
 				if (userPath && userPath.trim()) {
 					const newSource = resolve(userPath.trim());
 					categories = buildCategories(newSource);
-					CATEGORIES = categories;
 					allItems.length = 0;
 
 					for (const cat of categories) {
@@ -338,7 +351,7 @@ export default function systemManager(pi: ExtensionAPI) {
 					new Text(
 						theme.fg(
 							"muted",
-							"  Toggle symlinks: agent-git/ or ~/.agents/skills/ → agent/",
+							"  Toggle symlinks: agent-git/ or ~/.agents-3rdparty/<provider>/skills/ → agent/",
 						),
 						1,
 						0,
