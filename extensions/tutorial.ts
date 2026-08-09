@@ -40,7 +40,6 @@ interface TutorialConfig {
 	scope: "overview" | "detailed" | "comprehensive";
 	includeQuizzes: boolean;
 	includeDiagrams: boolean;
-	techStack: "react" | "vue" | "svelte" | "html";
 }
 
 interface ChaptersIndex {
@@ -54,7 +53,7 @@ interface ChapterEntry {
 	id: string;
 	title: string;
 	sourceFiles: string[]; // relative paths from sourceDir
-	chapterFile?: string;  // relative path to chapter component in tutorialDir
+	chapterFile?: string;  // relative path to chapter page in tutorialDir
 }
 
 interface ReadmeContent {
@@ -90,6 +89,9 @@ const CHAPTERS_FILENAME = "chapters.json";
 const TODOS_DIR_NAME = ".pi/todos";
 const README_FILENAME = "README.md";
 const DEFAULT_CONCURRENCY = 4;
+
+// The tutorial is always a static site styled with Bootstrap (no build step, no framework).
+const TECH_STACK = "HTML/CSS + Bootstrap";
 
 // Module-level state for active tmux deep-dive sessions (for cleanup on shutdown)
 let activeDeepDiveSession: { sessionName: string; tmpDir: string } | null = null;
@@ -323,7 +325,6 @@ function registerTutorialCreateCommand(pi: ExtensionAPI) {
 					scope: "detailed",
 					includeQuizzes: true,
 					includeDiagrams: true,
-					techStack: "react",
 				}, true);
 				return;
 			}
@@ -344,7 +345,6 @@ function registerTutorialCreateCommand(pi: ExtensionAPI) {
 5. What scope should the tutorial cover? ('overview', 'detailed', or 'comprehensive')
 6. Should it include quizzes? (yes/no)
 7. Should it include diagrams? (yes/no)
-8. Which tech stack for the tutorial UI? ('react', 'vue', 'svelte', or 'html')
 
 Or use quick mode: /tutorial:create <tutorial-dir> [source-code-dir]`, { deliverAs: "steer" });
 		},
@@ -566,7 +566,6 @@ function buildPerChapterSystemPrompt(
 	const scope = config?.scope || "detailed";
 	const includeQuizzes = config?.includeQuizzes ?? true;
 	const includeDiagrams = config?.includeDiagrams ?? true;
-	const techStack = config?.techStack || "react";
 
 	const lines: string[] = [
 		"You are a tutorial deep-dive worker. Your job is to expand a SINGLE skeleton tutorial chapter with detailed, rich content.",
@@ -596,9 +595,9 @@ function buildPerChapterSystemPrompt(
 		"- How would a developer extend or modify this code?",
 		"",
 		"### Step 3: Expand Chapter Content",
-		"Read the current skeleton chapter component in the tutorial project, then replace the skeleton content with rich, detailed content:",
+		"Read the current skeleton chapter page in the tutorial project, then replace the skeleton content with rich, detailed content:",
 		"",
-		"- **Detailed code walkthroughs**: Show key code snippets with line-by-line explanations using prism-react-renderer (vsLight theme)",
+		"- **Detailed code walkthroughs**: Show key code snippets with line-by-line explanations using Prism.js (light theme, wrapped in <pre><code class=\"language-xxx\">)",
 		"- **Pattern explanations**: Explain not just WHAT but WHY — design decisions, trade-offs, alternatives considered",
 		"- **Data flow analysis**: How data moves through the module with concrete examples",
 		"- **Cross-references**: Link to related chapters where relevant",
@@ -606,20 +605,20 @@ function buildPerChapterSystemPrompt(
 			? "- **Quizzes**: Multiple-choice knowledge-check questions testing deep understanding, with explanations for each answer"
 			: "- **Key takeaways**: Summary of the most important concepts",
 		includeDiagrams
-			? "- **Diagrams**: SVG diagrams showing architecture, data flow, or component relationships"
+			? "- **Diagrams**: Mermaid.js diagrams authored as text in <pre class=\"mermaid\"> blocks (flowchart/C4Context for architecture, sequenceDiagram for data flow, classDiagram for types, erDiagram for data models)"
 			: "- **Text-based descriptions**: Clear structured descriptions of architecture and flow",
 		"- **Progressive complexity**: Start with simple concepts, build to advanced topics",
 		"- Remove the \"🔍 This chapter will be expanded...\" placeholder note",
 		"",
 		"### Step 4: Update Supporting Files",
 		"- Update " + CHAPTERS_FILENAME + " if you discover new source files that should be referenced",
-		"- Ensure the chapter component renders all new content correctly",
+		"- Ensure the chapter page renders all new content correctly",
 		"",
 		"## Configuration",
 		"- **Audience**: " + audience,
 		"- **Learning Goals**: " + goals.join(", "),
 		"- **Scope**: " + scope,
-		"- **Tech Stack**: " + techStack,
+		"- **Tech Stack**: " + TECH_STACK,
 		includeQuizzes ? "- **Include Quizzes**: Yes" : "- **Include Quizzes**: No",
 		includeDiagrams ? "- **Include Diagrams**: Yes" : "- **Include Diagrams**: No",
 		"",
@@ -629,11 +628,9 @@ function buildPerChapterSystemPrompt(
 		"- Use analogies where helpful for the target audience (" + audience + ")",
 		"- Progressive complexity: start simple, add depth gradually",
 		"- Each chapter should read like a well-written technical blog post",
-		"- Code snippets: prism-react-renderer with vsLight theme",
+		"- Code snippets: Prism.js (light theme) in <pre><code class=\"language-xxx\"> blocks",
+		"- Render diagrams with Mermaid.js (text in <pre class=\"mermaid\"> blocks)",
 		"- Body text: Noto Sans font, Code: Source Code Pro font",
-		techStack === "react"
-			? "- Use prism-react-renderer's <Highlight> component or a shared <CodeBlock> wrapper for code snippets"
-			: "",
 	];
 
 	return lines.join("\n");
@@ -654,12 +651,12 @@ function buildPerChapterTask(
 	];
 
 	if (chapter.chapterFile) {
-		lines.push("**Chapter component to update**: " + chapter.chapterFile);
+		lines.push("**Chapter page to update**: " + chapter.chapterFile);
 	}
 
 	lines.push(
 		"",
-		"Start by reading the chapter component" + (chapter.chapterFile ? " at \"" + chapter.chapterFile + "\"" : " in the tutorial project") + ", then read all source files, and expand the chapter with detailed analysis.",
+		"Start by reading the chapter page" + (chapter.chapterFile ? " at \"" + chapter.chapterFile + "\"" : " in the tutorial project") + ", then read all source files, and expand the chapter with detailed analysis.",
 	);
 
 	return lines.join("\n");
@@ -1165,12 +1162,6 @@ function registerConfigureTutorialTool(pi: ExtensionAPI) {
 			]),
 			includeQuizzes: Type.Boolean(),
 			includeDiagrams: Type.Boolean(),
-			techStack: Type.Union([
-				Type.Literal("react"),
-				Type.Literal("vue"),
-				Type.Literal("svelte"),
-				Type.Literal("html"),
-			]),
 		}),
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1192,7 +1183,6 @@ function registerConfigureTutorialTool(pi: ExtensionAPI) {
 				scope: params.scope || "detailed",
 				includeQuizzes: params.includeQuizzes ?? true,
 				includeDiagrams: params.includeDiagrams ?? true,
-				techStack: params.techStack || "react",
 			};
 
 			// Build the prompt for the LLM
@@ -1214,7 +1204,7 @@ Configuration:
 - Scope: ${config.scope}
 - Quizzes: ${config.includeQuizzes ? "Yes" : "No"}
 - Diagrams: ${config.includeDiagrams ? "Yes" : "No"}
-- Tech Stack: ${config.techStack}`;
+- Tech Stack: ${TECH_STACK}`;
 
 			if (todoResult.created) {
 				responseText += `\n\nTodo tracking: ${todoResult.message}`;
@@ -1266,7 +1256,7 @@ Configuration:
 						`  Target: ${config.tutorialDir}`,
 						`  Source: ${config.sourceDir}`,
 						`  Scope: ${config.scope}`,
-						`  Stack: ${config.techStack}`,
+						`  Stack: ${TECH_STACK}`,
 					];
 				},
 			};
@@ -1477,7 +1467,7 @@ function buildTutorialPrompt(config: TutorialConfig): string {
 
 The tutorial should be created in "${config.tutorialDir}".
 
-This is a SURFACE ANALYSIS pass. Produce a working tutorial app with minimal chapter content.
+This is a SURFACE ANALYSIS pass. Produce a working tutorial site with minimal chapter content.
 The chapters will be expanded with detailed analysis in Pass 2 via \`/tutorial:deep-dive\`.
 
 ## Configuration
@@ -1488,17 +1478,21 @@ The chapters will be expanded with detailed analysis in Pass 2 via \`/tutorial:d
 - **Scope**: ${config.scope}
 - **Include Quizzes**: ${config.includeQuizzes ? "Yes (in Pass 2)" : "No"}
 - **Include Diagrams**: ${config.includeDiagrams ? "Yes (in Pass 2)" : "No"}
-- **Tech Stack**: ${config.techStack}
+- **Tech Stack**: ${TECH_STACK}
 
 ## Requirements
 
 ### 1. Project Structure
 
-Create a ${config.techStack === "react" ? "Vite + React + TypeScript" : config.techStack === "vue" ? "Vite + Vue + TypeScript" : config.techStack === "svelte" ? "Vite + Svelte" : "static HTML"} tutorial app with:
-- Clean navigation (sidebar with chapter list)
-- Progress tracking (use localStorage)
-- Responsive design (mobile-friendly sidebar toggle)
-- Syntax-highlighted code blocks (using prism-react-renderer with vsLight theme)
+Create a **static site using Bootstrap** (loaded via CDN — no build step, no framework). Structure:
+- index.html: landing page / table of contents linking to each chapter
+- chapters/<chapter-id>.html: one standalone HTML file per chapter, each including the full Bootstrap shell + sidebar so /tutorial:deep-dive can expand chapters in parallel without file conflicts
+- css/styles.css and js/app.js: shared stylesheet and the progress-tracking script, linked from every page
+- Bootstrap 5 (CSS + JS bundle) and Bootstrap Icons from CDN
+- Clean navigation: a responsive sidebar listing all chapters (collapses to a toggle/offcanvas menu on mobile)
+- Progress tracking via localStorage (mark chapters complete; "continue where you left off")
+- Syntax-highlighted code blocks via Prism.js from CDN (light theme, e.g. prism.css or prism-one-light)
+- Mermaid.js from CDN for rendering diagrams (see Styling below)
 - Google Fonts: Noto Sans for body text, Source Code Pro for code blocks
 
 ### 2. Surface Analysis
@@ -1530,11 +1524,12 @@ ${config.includeDiagrams ? "- Diagram placeholder sections (to be filled in Pass
 
 ### 5. Styling
 
-- Light theme with clear visual hierarchy
+- Light theme using Bootstrap's components and grid for clear visual hierarchy
 - Use Google Fonts: Noto Sans for body text, Source Code Pro for code blocks
-- Use prism-react-renderer for syntax highlighting with the vsLight theme
+- Syntax highlighting with Prism.js (CDN, light theme) — wrap snippets in <pre><code class="language-xxx">
+- Diagrams with Mermaid.js (CDN): author them as text inside <pre class="mermaid"> and call mermaid.initialize({ startOnLoad: true }). Use flowchart / C4Context (architecture), sequenceDiagram (data flow), classDiagram (types), erDiagram (data models), stateDiagram-v2 (state machines)
 - Proper spacing and accessibility (44px touch targets)
-- Hover/focus states for all interactive elements
+- Hover/focus states for all interactive elements (Bootstrap defaults + custom CSS where needed)
 
 ### 6. Chapters Index
 
@@ -1552,15 +1547,14 @@ After creating all chapters, generate a \`${CHAPTERS_FILENAME}\` file with:
     "goals": ${JSON.stringify(config.goals)},
     "scope": "${config.scope}",
     "includeQuizzes": ${config.includeQuizzes},
-    "includeDiagrams": ${config.includeDiagrams},
-    "techStack": "${config.techStack}"
+    "includeDiagrams": ${config.includeDiagrams}
   },
   "chapters": [
     {
       "id": "<kebab-case-chapter-id>",
       "title": "<chapter title>",
       "sourceFiles": ["relative/path/file1.ts", "relative/path/file2.ts"],
-      "chapterFile": "src/chapters/ChapterName.tsx"
+      "chapterFile": "chapters/<chapter-id>.html"
     }
   ]
 }
@@ -1568,7 +1562,7 @@ After creating all chapters, generate a \`${CHAPTERS_FILENAME}\` file with:
 
 For each chapter:
 - \`sourceFiles\`: every source file referenced, relative to "${config.sourceDir}". Support glob patterns.
-- \`chapterFile\`: path to the chapter component file, relative to "${config.tutorialDir}"
+- \`chapterFile\`: path to the chapter page (e.g. chapters/<id>.html), relative to "${config.tutorialDir}"
 - This index enables \`/tutorial:deep-dive\` for chapter expansion and \`/tutorial:update\` for drift detection
 
 ### 7. Project README
@@ -1603,7 +1597,7 @@ Create a \`README.md\`:
 
 ---
 
-*This README is automatically generated. For interactive tutorial experience, run the tutorial app.*
+*This README is automatically generated. For the interactive tutorial experience, open the site (index.html) in a browser.*
 \`\`\`
 
 ## Process
@@ -1613,7 +1607,7 @@ Create a \`README.md\`:
 3. **Write Skeletons**: Create thin chapter content with file references
 4. **Generate Index**: Create \`${CHAPTERS_FILENAME}\` with config and chapter-to-files mapping
 5. **Create README**: Generate \`README.md\` with project details
-6. **Test**: Ensure the tutorial builds and runs
+6. **Test**: Ensure the tutorial renders correctly in a browser (open index.html)
 
 Start by exploring the source codebase at "${config.sourceDir}" and then create the skeleton tutorial in "${config.tutorialDir}".`;
 }
@@ -1631,7 +1625,6 @@ function buildDeepDivePrompt(
 	const scope = config?.scope || "detailed";
 	const includeQuizzes = config?.includeQuizzes ?? true;
 	const includeDiagrams = config?.includeDiagrams ?? true;
-	const techStack = config?.techStack || "react";
 
 	const chapterCount = chapters.length;
 	const isSingle = chapterCount === 1;
@@ -1655,7 +1648,7 @@ A skeleton tutorial was created in Pass 1 with surface-level analysis. Your job 
 		prompt += `### ${i + 1}. ${ch.title} (\`${ch.id}\`)\n`;
 		prompt += `**Source files**: ${ch.sourceFiles.map(f => `\`${f}\``).join(", ")}\n`;
 		if (ch.chapterFile) {
-			prompt += `**Chapter component**: \`${ch.chapterFile}\`\n`;
+			prompt += `**Chapter page**: \`${ch.chapterFile}\`\n`;
 		}
 		prompt += "\n";
 	}
@@ -1682,27 +1675,27 @@ Based on the surface analysis in the skeleton, formulate 3-5 deeper questions:
 - How would a developer extend or modify this code?
 
 ### Step 3: Expand Chapter Content
-Read the current skeleton chapter component${chapters.some(ch => ch.chapterFile) ? " (paths listed above)" : " in the tutorial project"}, then replace the skeleton content with rich, detailed content:
+Read the current skeleton chapter page${chapters.some(ch => ch.chapterFile) ? " (paths listed above)" : " in the tutorial project"}, then replace the skeleton content with rich, detailed content:
 
-- **Detailed code walkthroughs**: Show key code snippets with line-by-line explanations using prism-react-renderer (vsLight theme)
+- **Detailed code walkthroughs**: Show key code snippets with line-by-line explanations using Prism.js (light theme, wrapped in <pre><code class="language-xxx">)
 - **Pattern explanations**: Explain not just WHAT but WHY — design decisions, trade-offs, alternatives considered
 - **Data flow analysis**: How data moves through the module with concrete examples
 - **Cross-references**: Link to related chapters where relevant
 ${includeQuizzes ? "- **Quizzes**: Multiple-choice knowledge-check questions testing deep understanding, with explanations for each answer" : "- **Key takeaways**: Summary of the most important concepts"}
-${includeDiagrams ? "- **Diagrams**: SVG diagrams showing architecture, data flow, or component relationships" : "- **Text-based descriptions**: Clear structured descriptions of architecture and flow"}
+${includeDiagrams ? "- **Diagrams**: Mermaid.js diagrams in mermaid code blocks (flowchart/C4Context for architecture, sequenceDiagram for data flow, classDiagram for types, erDiagram for data models)" : "- **Text-based descriptions**: Clear structured descriptions of architecture and flow"}
 - **Progressive complexity**: Start with simple concepts, build to advanced topics
 - Remove the \"🔍 This chapter will be expanded...\" placeholder note
 
 ### Step 4: Update Supporting Files
 - Update \`${CHAPTERS_FILENAME}\` if you discover new source files that should be referenced in any chapter
-- Ensure each chapter component renders all new content correctly
-- Test that the tutorial still builds and runs
+- Ensure each chapter page renders all new content correctly
+- Test that the tutorial still renders correctly
 
 ## Configuration
 - **Audience**: ${audience}
 - **Learning Goals**: ${goals.join(", ")}
 - **Scope**: ${scope}
-- **Tech Stack**: ${techStack}
+- **Tech Stack**: ${TECH_STACK}
 ${includeQuizzes ? "- **Include Quizzes**: Yes" : "- **Include Quizzes**: No"}
 ${includeDiagrams ? "- **Include Diagrams**: Yes" : "- **Include Diagrams**: No"}
 
@@ -1712,20 +1705,20 @@ ${includeDiagrams ? "- **Include Diagrams**: Yes" : "- **Include Diagrams**: No"
 - Use analogies where helpful for the target audience (${audience})
 - Progressive complexity: start simple, add depth gradually
 - Each chapter should read like a well-written technical blog post
-- Code snippets: prism-react-renderer with vsLight theme
+- Code snippets: Prism.js (light theme) in <pre><code class="language-xxx"> blocks
+- Render diagrams with Mermaid.js (text in <pre class="mermaid"> blocks)
 - Body text: Noto Sans font, Code: Source Code Pro font
-${techStack === "react" ? "- Use prism-react-renderer's <Highlight> component or a shared <CodeBlock> wrapper for code snippets" : ""}
 
 ## Process
-1. Read the current skeleton chapter component for the first chapter
+1. Read the current skeleton chapter page for the first chapter
 2. Read all source files referenced by that chapter
 3. Analyze deeply and expand the chapter content
 4. Repeat for each remaining chapter
 5. Update \`${CHAPTERS_FILENAME}\` if file references changed
 6. Update the README.md status from \"🏗️ Skeleton\" to \"✅ Complete\" and version to 1.0.0
-7. Verify the tutorial builds and runs correctly
+7. Verify the tutorial renders correctly in a browser
 
-Start by reading the chapter components and source files for the first chapter: **${chapters[0].title}** (\`${chapters[0].id}\`).`;
+Start by reading the chapter pages and source files for the first chapter: **${chapters[0].title}** (\`${chapters[0].id}\`).`;
 
 	return prompt;
 }
@@ -1848,7 +1841,7 @@ function generateTodoItems(config: TutorialConfig): TodoItem[] {
 		{
 			title: "Create tutorial project scaffold",
 			tags: ["tutorial", "setup"],
-			body: `Set up the ${config.techStack} project in ${config.tutorialDir} with Vite, TypeScript, prism-react-renderer (vsLight theme), navigation, and progress tracking.`,
+			body: `Set up the static ${TECH_STACK} tutorial in ${config.tutorialDir} with Bootstrap (CDN), Prism.js (CDN), Mermaid.js (CDN), sidebar navigation, and progress tracking.`,
 		},
 		{
 			title: "Create skeleton chapters with file references",
@@ -1935,7 +1928,7 @@ function buildTodoMdContent(items: TodoItem[], config: TutorialConfig): string {
 		`- **Source Codebase**: ${config.sourceDir}`,
 		`- **Target Audience**: ${config.audience}`,
 		`- **Scope**: ${config.scope}`,
-		`- **Tech Stack**: ${config.techStack}`,
+		`- **Tech Stack**: ${TECH_STACK}`,
 		`- **Include Quizzes**: ${config.includeQuizzes ? "Yes" : "No"}`,
 		`- **Include Diagrams**: ${config.includeDiagrams ? "Yes" : "No"}`,
 		"",
