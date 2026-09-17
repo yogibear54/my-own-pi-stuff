@@ -1,10 +1,12 @@
 # AGENTS.md
 
-This file has three sections, each scoped to a different situation:
+This file has two sections, each scoped to a different situation:
 
 - **Coding guidelines** — apply to all coding work, in any project.
-- **Subagent routing** — applies when spawning subagents with the `Agent` tool.
 - **Pi agent config layout** — applies only when editing agent config on this machine.
+
+Subagent routing (which agent to spawn with the `Agent` tool) lives in
+`prompts/subagents.md`.
 
 ---
 
