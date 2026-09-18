@@ -1,7 +1,7 @@
 ---
 name: code-review
 description: Code review subagent — reviews coding-agent output against the original task
-tools: [read, grep, find, ls, bash, questionnaire, todos]
+tools: [read, grep, find, ls, bash, questionnaire, todo]
 extensions: true
 skills: true
 model: minimax/MiniMax-M3

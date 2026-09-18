@@ -1,7 +1,7 @@
 ---
 name: planning
 description: Planning subagent — produces and persists plans for tasks and projects to .pi/plan/
-tools: [read, grep, find, ls, bash, write, questionnaire, todos]
+tools: [read, grep, find, ls, bash, write, questionnaire, todo]
 extensions: true
 skills: true
 model: minimax/MiniMax-M3
