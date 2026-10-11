@@ -27,12 +27,28 @@ Extensions live in `extensions/`. They're TypeScript files (or directories with 
 | **quick-review** | Command (`/quick-review`) | *(mine)* Code review for bugs, security issues, and error handling gaps with optional model switching |
 | **review** | Command (`/review`) | Full code review extension supporting GitHub PRs, branch diffs, uncommitted changes, and specific commits |
 | **split-fork** | Tool | Opens a new terminal split/pane (Ghostty, tmux) running a separate Pi session |
-| **stream-output** | Flag (`--stream`) | Streams thinking, text, and tool content to stderr with formatted prefixes for programmatic consumption |
+| **stream-output** | Flags (`--stream`, `--stream-output`) | Streams thinking, text, tool content, or status-only liveness events to stderr by default, with opt-in stdout or file targets for programmatic consumption |
 | **system-manager** | Command (`/system`) | Enable/disable skills, extensions, utils, and root config files via symlink management between `agent-git/` and `agent/` |
 | **todos** | Tool + Command (`/todos`) | File-based todo management (`.pi/todos/`) with lock-based concurrency for multi-session use |
 | **tools** | Command (`/tools`) | Interactive tool selector to enable/disable tools with persistence across sessions |
 | **tutorial** | Commands (`/tutorial:create`, `/tutorial:deep-dive`, etc.) | Creates and manages interactive codebase tutorials with multi-pass generation |
 | **whimsical** | Hook | Replaces the standard "Thinking…" indicator with random whimsical messages |
+
+### Stream Output
+
+`stream-output` defaults to `stderr` so `pi -p` keeps `stdout` reserved for the final answer. Use `--stream=status` for non-sensitive liveness updates, especially in automation where a long thinking phase can otherwise look hung.
+
+Useful patterns:
+
+```bash
+pi -p --stream=status --stream-output=file --stream-file=/tmp/pi-progress.log "review this diff"
+pi -p --stream=message,status --stream-no-ansi=true "review this diff"
+pi -p --stream=message --stream-output=stdout "terminal-only streaming"
+```
+
+`--stream-output=stdout` is intentionally opt-in because it mixes streamed prefixes with the final `pi -p` answer on stdout.
+
+Use `--stream-no-ansi=true` when the flag appears before the prompt; Pi parses extension flags before it knows their registered types, so the explicit value avoids consuming the prompt as a flag value.
 
 ---
 
