@@ -67,11 +67,18 @@ info "imggen CLI available"
 
 # --- token hint ------------------------------------------------------------------
 echo ""
+TOKEN_OK=0
 if [ -n "${REPLICATE_API_TOKEN:-}" ] || grep -qE '^REPLICATE_API_TOKEN=.+' "$INSTALL_DIR/.env" 2>/dev/null; then
   info "REPLICATE_API_TOKEN configured"
+  TOKEN_OK=1
 else
   warn "No REPLICATE_API_TOKEN — copy $INSTALL_DIR/.env.example to $INSTALL_DIR/.env and set it"
 fi
+if [ -n "${OPENROUTER_API_KEY:-}" ] || grep -qE '^OPENROUTER_API_KEY=.+' "$INSTALL_DIR/.env" 2>/dev/null; then
+  info "OPENROUTER_API_KEY configured (--provider openrouter available)"
+  TOKEN_OK=1
+fi
+[ "$TOKEN_OK" -eq 0 ] && warn "No image provider credential found"
 
 # --- save config if non-default ----------------------------------------------------
 if [ "$INSTALL_DIR" != "$DEFAULT_DIR" ]; then

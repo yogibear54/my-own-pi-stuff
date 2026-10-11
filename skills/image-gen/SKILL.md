@@ -30,7 +30,10 @@ It syncs the project environment and verifies the install.
    defaults: `--model` (default `openai/gpt-image-2`), `--aspect-ratio`
    (default `1:1`), `--resolution-tier` (`1K`/`2K`/`4K`),
    `--output-format` (`png`), model-specific `--extra key=value`
-   (e.g. `--extra seed=42`).
+   (e.g. `--extra seed=42`). A second provider is available:
+   `--provider openrouter` (59 models via the unified Image API; default
+   `google/gemini-nano-banana-2.1`; needs `OPENROUTER_API_KEY`).
+   Check `imggen models` for capabilities before switching.
 
 Do not invent reference-image paths: if the user wants an edit but gives no
 image, ask for the path.
@@ -77,14 +80,18 @@ to the user.
 ## Introspection
 
 ```bash
-~/.pi/agent-git/skills/image-gen/scripts/imggen models   # 24-model capability table
-~/.pi/agent-git/skills/image-gen/scripts/imggen doctor   # token/provider/capture health
+~/.pi/agent-git/skills/image-gen/scripts/imggen models   # capability table (both providers)
+~/.pi/agent-git/skills/image-gen/scripts/imggen doctor   # credentials/providers/captures
 ```
 
 ## Notes
 
-- Default model is `openai/gpt-image-2` with `quality: low` pinned. Other
-  models: check `imggen models` first; a model set in `ALLOWED_MODELS__REPLICATE`
+- Default model is `openai/gpt-image-2` (replicate) with `quality: low`
+  pinned. OpenRouter default is `google/gemini-nano-banana-2.1`; on some
+  accounts google-family OpenRouter models return a terminal 403 (TOS) —
+  if that happens, pick another family (e.g.
+  `bytedance-seed/seedream-4.5`).
+- A model set in `ALLOWED_MODELS__REPLICATE` / `ALLOWED_MODELS__OPENROUTER`
   (.env) must be listed there or overrides are rejected.
 - Relative `--image` / `--output-dir` paths resolve against YOUR current
   working directory; outputs land in the project's `outputs/` folder unless
