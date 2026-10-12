@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Thin wrapper around the ai-video-gen CLI.
+#
+# Everything is forwarded to the installed `vidgen` binary; the only
+# intercepted flag is --dir (consumed here, not forwarded).
+#
+# Install-dir resolution (first found wins):
+#   1. --dir CLI argument
+#   2. VIDEO_GEN_DIR environment variable
+#   3. ~/.config/video-gen-skill/config.env  (VIDEO_GEN_DIR=...)
+#   4. Default: the ai-video-gen project checkout
+#
+# Relative reference paths (--first-frame/--last-frame/--image/--video) and
+# --output-dir are resolved against the CALLER's working directory; the
+# wrapper then runs from the project root so .env and defaults resolve.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_DIR="/home/yogibear54/Projects/lotus-creations.com/_PROJECTS/ai-video-gen"
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/video-gen-skill/config.env"
+
+# --- resolve install dir (intercepting --dir) -------------------------------
+INSTALL_DIR=""
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dir)
+      INSTALL_DIR="$(cd "$2" && pwd)"
+      shift 2
+      ;;
+    --dir=*)
+      INSTALL_DIR="$(cd "${1#--dir=}" && pwd)"
+      shift
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$INSTALL_DIR" ] && [ -n "${VIDEO_GEN_DIR:-}" ]; then
+  INSTALL_DIR="$VIDEO_GEN_DIR"
+fi
+
+if [ -z "$INSTALL_DIR" ] && [ -f "$CONFIG_FILE" ]; then
+  # shellcheck source=/dev/null
+  source "$CONFIG_FILE"
+  [ -n "${VIDEO_GEN_DIR:-}" ] && INSTALL_DIR="$VIDEO_GEN_DIR"
+fi
+
+if [ -z "$INSTALL_DIR" ]; then
+  INSTALL_DIR="$DEFAULT_DIR"
+fi
+
+if [ ! -f "$INSTALL_DIR/pyproject.toml" ]; then
+  echo "error: ai-video-gen not found at $INSTALL_DIR" >&2
+  echo "run ${SCRIPT_DIR}/setup.sh first (or pass --dir /path/to/ai-video-gen)" >&2
+  exit 2
+fi
+
+# --- absolutize caller-relative paths ---------------------------------------
+ORIG_PWD="$PWD"
+FINAL=()
+HAS_OUTPUT_DIR=0
+PREV=""
+for arg in ${ARGS[@]+"${ARGS[@]}"}; do
+  case "$PREV" in
+    --first-frame | --last-frame | --image | --video | --output-dir)
+      HAS_OUTPUT_DIR=1
+      case "$arg" in
+        /*) FINAL+=("$arg") ;;
+        *) FINAL+=("$ORIG_PWD/$arg") ;;
+      esac
+      ;;
+    *)
+      FINAL+=("$arg")
+      ;;
+  esac
+  case "$arg" in
+    --first-frame | --last-frame | --image | --video | --output-dir) PREV="$arg" ;;
+    *) PREV="" ;;
+  esac
+done
+
+# Skill default: save into the CALLER's working directory (./outputs), not
+# the project folder — inject when the GENERATE/ANIMATE call didn't pass
+# --output-dir (models/doctor don't take the flag).
+CMD="${ARGS[0]:-}"
+if [ "$HAS_OUTPUT_DIR" -eq 0 ] && { [ "$CMD" = "generate" ] || [ "$CMD" = "animate" ]; }; then
+  FINAL+=("--output-dir" "$ORIG_PWD/outputs")
+fi
+
+# --- run from the project root so .env and defaults resolve -----------------
+cd "$INSTALL_DIR"
+
+BIN="$INSTALL_DIR/.venv/bin/vidgen"
+if [ -x "$BIN" ]; then
+  exec "$BIN" ${FINAL[@]+"${FINAL[@]}"}
+fi
+
+if command -v uv > /dev/null 2>&1; then
+  exec uv run --directory "$INSTALL_DIR" vidgen ${FINAL[@]+"${FINAL[@]}"}
+fi
+
+echo "error: vidgen not installed. run ${SCRIPT_DIR}/setup.sh first" >&2
+exit 2
